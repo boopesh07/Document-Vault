@@ -1,1 +1,231 @@
-# Document-Vault
+# Document Vault Service
+
+## Overview
+Document Vault is the secure storage and verification layer for legal and compliance documents that back tokenized assets.  
+The service provides:
+
+- Authenticated APIs for uploading, verifying, listing, downloading, and archiving documents.
+- Strong hashing (SHA-256) with mock blockchain registration for tamper detection.
+- Encrypted document storage in AWS S3 (SSE-KMS) and signed URL distribution.
+- Event emission (`document.uploaded`, `document.verified`, `document.mismatch`, `document.archived`) over SQS for downstream systems.
+- Compliance-ready audit trails persisted in Postgres (Supabase).
+- Cloud-native deployment targeting AWS Fargate (ECS) with Docker packaging.
+
+> Access control is currently mocked to always authorize requests. Replace `AccessControlService` when the dedicated microservice is available.
+
+---
+
+## Architecture Summary
+
+| Concern             | Implementation                                                                                                                                                                                         |
+|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Framework           | FastAPI + Pydantic v2                                                                                                                                                                                  |
+| Infrastructure      | AWS S3 (encrypted), AWS SQS, Supabase Postgres, CloudWatch Logs → Kinesis Firehose → S3 for audit retention, AWS ECS (Fargate)                                                                          |
+| Core modules        | `DocumentService` orchestrates hashing, storage, audit logging, event publishing, and blockchain integration (mocked).                                                                                   |
+| Data integrity      | SHA-256 hashing, on-chain registration (mock), periodic rehashing support, and append-only `document_audit_logs`.                                                                                       |
+| Security            | TLS enforced via AWS endpoints, S3 SSE-KMS, signed download URLs, future JWT verification hook, infrastructure secrets via `.env` or AWS Secrets Manager / SSM Parameter Store.                          |
+| Observability       | Structured JSON logging (structlog) → CloudWatch Logs, recommended Kinesis Firehose sink to encrypted S3 for immutable archival and analytics.                                                          |
+
+---
+
+## Repository Layout
+
+```
+app/
+  api/                # FastAPI routers and dependency wiring
+  core/               # Settings and logging configuration
+  db/                 # Async SQLAlchemy session management
+  events/             # AWS SQS publisher
+  models/             # SQLAlchemy models and custom types
+  schemas/            # Pydantic schemas for request/response
+  services/           # Domain services (storage, hashing, audit, blockchain mock)
+alembic/              # Migration environment and version scripts
+infra/ecs-task-def.json
+tests/                # Pytest suite using moto for AWS mocks
+build.sh / deploy.sh  # CI/CD helpers
+Dockerfile / .dockerignore
+.env.example          # Required configuration placeholders
+.venv/                # Local virtualenv (created via `python3 -m venv .venv`)
+```
+
+---
+
+## Environment Configuration
+
+1. Duplicate `.env.example` to `.env` (or `.env.prod` for deployment) and populate the values.
+2. Secrets such as JWT keys and Supabase credentials should live in AWS Secrets Manager / SSM parameters.  
+   The ECS task definition template expects `JWT_PUBLIC_KEY` to come from SSM.
+3. Required variables (non-exhaustive):
+
+| Variable                         | Description                                                                                         |
+|----------------------------------|-----------------------------------------------------------------------------------------------------|
+| `DATABASE_URL`                   | Supabase connection string (`postgresql+psycopg://...`).                                           |
+| `DOCUMENT_VAULT_BUCKET`          | Private S3 bucket for document binaries (versioning & default encryption enabled).                 |
+| `AWS_S3_KMS_KEY_ID`              | Customer-managed CMK ARN applied to S3 uploads.                                                    |
+| `DOCUMENT_EVENTS_QUEUE_URL`      | SQS queue URL for document events; configure DLQ & retention policies externally.                 |
+| `PRESIGNED_URL_EXPIRATION_SECONDS` | Signed URL TTL (recommended < 3600s).                                                               |
+| `LOG_GROUP_NAME`                 | CloudWatch Logs group for ECS task logging.                                                        |
+| `ECS_EXECUTION_ROLE_ARN`         | Role granting ECS task permissions (ECR pull, CloudWatch logs).                                    |
+| `ECS_TASK_ROLE_ARN`              | Role granting runtime access to S3, SQS, KMS, Secrets Manager, etc.                                |
+
+---
+
+## Local Development
+
+### Prerequisites
+
+- Python 3.11 or 3.12 (Python 3.13 is not yet supported by `pydantic-core` / `psycopg`)
+- Docker Engine + BuildKit (`docker buildx`)
+- AWS CLI v2
+- Optional: `direnv` for automatic environment variable loading
+
+### Bootstrap
+
+```bash
+# 1. Create a virtual environment (already provisioned as `.venv` in this repo)
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 2. Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 3. Set local environment variables
+cp .env.example .env
+# Edit .env as needed (local Supabase URL, LocalStack S3/SQS endpoints, etc.)
+
+# 4. Run migrations (see next section)
+alembic upgrade head
+
+# 5. Start the API
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+> Use Python 3.11 or 3.12 only. Python 3.13 is currently unsupported by upstream dependencies (`pydantic-core`, `psycopg`).
+
+Navigate to `http://localhost:8000/docs` for interactive Swagger documentation.
+
+---
+
+## Database & Migrations
+
+- ORM: SQLAlchemy 2.x (async) with Alembic migrations.
+- Initial schema lives in `alembic/versions/20240601_01_create_documents.py`.
+- Commands:
+
+```bash
+# Generate new migration after model changes
+alembic revision --autogenerate -m "Describe change"
+
+# Apply migrations
+alembic upgrade head
+
+# Roll back one migration
+alembic downgrade -1
+```
+
+For Supabase, run migrations as part of your CI/CD pipeline prior to deploying new task revisions.
+
+---
+
+## Testing
+
+```bash
+source .venv/bin/activate
+pytest
+```
+
+- Tests leverage `moto` to emulate S3 and SQS interactions, and SQLite (async) for the database.
+- `build.sh` always executes the test suite before building & pushing the Docker image.
+- If running in a restricted network, ensure you have access to Python package indices or mirror wheels locally.
+
+---
+
+## Build & Deployment Workflow
+
+1. **Build (`build.sh`)**
+   - Creates/uses `.venv`, installs dependencies, and runs `pytest`.
+   - Authenticates to ECR, ensures the repository exists, and builds/pushes a multi-arch image using `docker buildx`.
+   - Inputs: `.env.prod` (or override via `ENV_FILE`), AWS credentials with ECR permissions.
+
+2. **Deploy (`deploy.sh`)**
+   - Renders `infra/ecs-task-def.json` into a concrete task definition by interpolating environment values.
+   - Registers the task definition and starts a one-off Fargate task (customize to update an ECS service if preferred).
+   - Requires `CLUSTER`, `SUBNET_ID`, `SECURITY_GROUP_ID`, task/exec role ARNs, and networking primitives.
+
+3. **ECS Task Definition**
+   - Container listens on port 8000, uses `uvicorn`, health check at `/healthz`.
+   - Logs ship to CloudWatch (`<LOG_GROUP_NAME>`). Configure Kinesis Firehose to continuously export to an encrypted, versioned S3 bucket for immutable audit retention.
+
+---
+
+## Runtime Behaviour
+
+### API Surface (`/api/v1`)
+
+| Method | Route                             | Description                                                                                           |
+|--------|-----------------------------------|-------------------------------------------------------------------------------------------------------|
+| POST   | `/documents/upload`               | Multipart upload (`file`, metadata form fields). Stores binary in S3, records metadata + audit log.  |
+| POST   | `/documents/verify`               | Re-hashes object retrieved from S3, updates status (`verified` / `mismatch`), emits SQS event.       |
+| GET    | `/documents/{entity_id}`          | Lists documents for an issuer/investor/deal (`entity_type` query param).                             |
+| GET    | `/documents/{id}/download`        | Returns a short-lived presigned URL (requires `requestor_id`).                                       |
+| DELETE | `/documents/{id}`                 | Soft-archives document (status → `archived`), logs event, emits SQS notification.                    |
+
+All responses are Pydantic models defined in `app/schemas/document.py`.
+
+### Event Contracts
+
+- `document.uploaded`, `document.verified`, `document.mismatch`, `document.archived`.
+- Message body JSON:
+
+```json
+{
+  "event_type": "document.verified",
+  "occurred_at": "2024-06-01T12:34:56.789Z",
+  "payload": {
+    "document_id": "uuid",
+    "entity_type": "issuer",
+    "entity_id": "uuid",
+    "sha256_hash": "..."
+  }
+}
+```
+
+Extend payloads as downstream consumers evolve; maintain backwards compatibility via versioned contracts if needed.
+
+---
+
+## Security & Compliance Notes
+
+- **Encryption in transit**: enforced via HTTPS endpoints for S3/SQS and TLS termination at load balancer or API gateway.
+- **Encryption at rest**: S3 uploads enforce `ServerSideEncryption=aws:kms` with `AWS_S3_KMS_KEY_ID`; enable bucket versioning and MFA delete.
+- **Audit logging**: Application logs → CloudWatch Logs → Kinesis Firehose → encrypted S3 (immutable). Database `document_audit_logs` provide structured audit events with user attribution.
+- **Access control**: Currently mocked (returns `True`). Replace `AccessControlService` with real microservice integration before production launch.
+- **Secrets management**: Prefer AWS Secrets Manager/SSM for database credentials, JWT keys, and blockchain endpoints. Reference them in ECS task definition via `secrets`.
+- **Networking**: Deploy ECS tasks in private subnets with VPC endpoints for S3/SQS/KMS. Enable security group egress restrictions.
+
+---
+
+## Extensibility Roadmap
+
+- Integrate real blockchain gateway and persist transaction receipts.
+- Replace RBAC mock with the dedicated Access Control service.
+- Support document versioning and lifecycle policies (retention, legal hold).
+- Add scheduled rehash jobs (AWS EventBridge + Lambda) to detect drift against on-chain hashes.
+- Implement dead-letter queues and retries for SQS publishing.
+- Expose admin endpoints for audit exports and per-entity analytics.
+- Extend to support DocuSign / HelloSign callbacks for auto ingestion.
+
+---
+
+## Troubleshooting
+
+- **Dependencies fail to install offline**: mirror Python packages locally or configure a private PyPI proxy; scripts assume outbound network access.
+- **`pytest` cannot locate AWS services**: ensure environment variables align with moto defaults (`AWS_REGION`, `DOCUMENT_VAULT_BUCKET`).
+- **ECS task IAM errors**: confirm task role grants `s3:PutObject`, `s3:GetObject`, `kms:Encrypt/Decrypt`, `sqs:SendMessage`, and read access to Secrets Manager parameters.
+
+---
+
+## Support
+
+For questions or clarifications, contact the platform team or update this README with additional runbooks as the ecosystem evolves.
