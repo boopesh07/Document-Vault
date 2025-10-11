@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio("asyncio")
 async def test_document_upload_verify_and_archive_flow(async_client, aws_environment):
     entity_id = uuid4()
     uploader_id = uuid4()

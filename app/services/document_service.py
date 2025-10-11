@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import UploadFile
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -86,12 +87,12 @@ class DocumentService:
             sha256_hash=sha256_hash,
             status=DocumentStatus.UPLOADED,
             uploaded_by=metadata.uploaded_by,
-            metadata=metadata.metadata,
+            metadata_json=metadata.metadata,
         )
         session.add(document)
         await session.flush()
 
-        await self.audit_service.log_event(
+        audit_log = await self.audit_service.log_event(
             session,
             document_id=document.id,
             event_type=DocumentAuditEvent.UPLOAD,
@@ -99,6 +100,7 @@ class DocumentService:
             actor_role="uploader",
             context={"filename": document.filename, "mime_type": document.mime_type},
         )
+        document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
 
         await self.event_publisher.publish(
             event_type=DocumentAuditEvent.UPLOAD.value,
@@ -139,13 +141,14 @@ class DocumentService:
                 document_hash=document.sha256_hash,
                 metadata_uri=None,
             )
-            await self.audit_service.log_event(
+            audit_log = await self.audit_service.log_event(
                 session,
                 document_id=document.id,
                 event_type=DocumentAuditEvent.VERIFIED,
                 actor_id=verifier_id,
                 actor_role="verifier",
             )
+            document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
             await self.event_publisher.publish(
                 event_type=DocumentAuditEvent.VERIFIED.value,
                 payload={
@@ -157,7 +160,7 @@ class DocumentService:
             )
         else:
             document.status = DocumentStatus.MISMATCH
-            await self.audit_service.log_event(
+            audit_log = await self.audit_service.log_event(
                 session,
                 document_id=document.id,
                 event_type=DocumentAuditEvent.MISMATCH,
@@ -165,6 +168,7 @@ class DocumentService:
                 actor_role="verifier",
                 context={"expected_hash": document.sha256_hash, "calculated_hash": calculated_hash},
             )
+            document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
             await self.event_publisher.publish(
                 event_type=DocumentAuditEvent.MISMATCH.value,
                 payload={
@@ -194,13 +198,14 @@ class DocumentService:
         document.archived_at = datetime.now(tz=timezone.utc)
         document.archived_by = archived_by
 
-        await self.audit_service.log_event(
+        audit_log = await self.audit_service.log_event(
             session,
             document_id=document.id,
             event_type=DocumentAuditEvent.ARCHIVED,
             actor_id=archived_by,
             actor_role="admin",
         )
+        document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
 
         await self.event_publisher.publish(
             event_type=DocumentAuditEvent.ARCHIVED.value,
@@ -218,7 +223,9 @@ class DocumentService:
         self, session: AsyncSession, *, entity_id: UUID, entity_type: DocumentEntityType
     ) -> Sequence[Document]:
         result = await session.execute(
-            select(Document).where(Document.entity_id == entity_id, Document.entity_type == entity_type)
+            select(Document)
+            .options(selectinload(Document.audit_logs))
+            .where(Document.entity_id == entity_id, Document.entity_type == entity_type)
         )
         return result.scalars().all()
 

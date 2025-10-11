@@ -1,15 +1,20 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
 
     project_name: str = "Document Vault Service"
-    environment: Literal["local", "dev", "staging", "prod"] = Field("local", alias="ENVIRONMENT")
+    environment: Literal["local", "dev", "staging", "prod", "test"] = Field("local", alias="ENVIRONMENT")
     api_v1_prefix: str = "/api/v1"
 
     # Security & auth
@@ -20,6 +25,7 @@ class Settings(BaseSettings):
     database_url: str = Field(..., alias="DATABASE_URL")
     database_pool_size: int = Field(5, alias="DATABASE_POOL_SIZE")
     database_max_overflow: int = Field(10, alias="DATABASE_MAX_OVERFLOW")
+    database_pool_pre_ping: bool = Field(True, alias="DATABASE_POOL_PRE_PING")
 
     # AWS / S3 storage
     aws_region: str = Field(..., alias="AWS_REGION")
@@ -39,8 +45,12 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     log_format: Literal["json", "text"] = Field("json", alias="LOG_FORMAT")
 
-    class Config:
-        case_sensitive = False
+    @field_validator("aws_profile", "s3_endpoint_url", "blockchain_endpoint_url", mode="before")
+    @classmethod
+    def blank_to_none(cls, value: str | None):
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 @lru_cache

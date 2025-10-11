@@ -18,18 +18,18 @@ class StorageService:
     async def upload_document(self, file_obj: BinaryIO, *, filename: str, mime_type: str) -> tuple[str, str | None]:
         object_key = f"documents/{uuid4()}/{filename}"
         file_obj.seek(0)
+        file_obj.seek(0)
+        body = file_obj.read()
         async with self._session.client(
             "s3", region_name=settings.aws_region, endpoint_url=settings.s3_endpoint_url
         ) as s3_client:
-            await s3_client.upload_fileobj(
-                Fileobj=file_obj,
+            await s3_client.put_object(
                 Bucket=settings.document_bucket,
                 Key=object_key,
-                ExtraArgs={
-                    "ContentType": mime_type,
-                    "ServerSideEncryption": "aws:kms",
-                    "SSEKMSKeyId": settings.s3_kms_key_id,
-                },
+                Body=body,
+                ContentType=mime_type,
+                ServerSideEncryption="aws:kms",
+                SSEKMSKeyId=settings.s3_kms_key_id,
             )
             head_object = await s3_client.head_object(Bucket=settings.document_bucket, Key=object_key)
 

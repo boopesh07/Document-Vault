@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.document import DocumentAuditEvent, DocumentEntityType, DocumentStatus, DocumentType
 
@@ -55,6 +55,8 @@ class DocumentAuditLogEntry(BaseModel):
 
 
 class DocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: UUID
     entity_type: DocumentEntityType
     entity_id: UUID
@@ -73,13 +75,10 @@ class DocumentResponse(BaseModel):
     archived_at: datetime | None
     hash_verified_at: datetime | None
     on_chain_reference: str | None
-    metadata: dict[str, Any] | None
+    metadata: dict[str, Any] | None = Field(default=None, alias="metadata_json")
     created_at: datetime
     updated_at: datetime
     audit_logs: list[DocumentAuditLogEntry] | None = None
-
-    class Config:
-        from_attributes = True
 
 
 class DocumentListResponse(BaseModel):

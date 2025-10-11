@@ -60,6 +60,7 @@ Dockerfile / .dockerignore
 | Variable                         | Description                                                                                         |
 |----------------------------------|-----------------------------------------------------------------------------------------------------|
 | `DATABASE_URL`                   | Supabase connection string (`postgresql+psycopg://...`).                                           |
+| `DATABASE_POOL_PRE_PING`         | Toggle connection pre-ping; set `false` for async SQLite or local tests.                           |
 | `DOCUMENT_VAULT_BUCKET`          | Private S3 bucket for document binaries (versioning & default encryption enabled).                 |
 | `AWS_S3_KMS_KEY_ID`              | Customer-managed CMK ARN applied to S3 uploads.                                                    |
 | `DOCUMENT_EVENTS_QUEUE_URL`      | SQS queue URL for document events; configure DLQ & retention policies externally.                 |
