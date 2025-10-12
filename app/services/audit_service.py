@@ -33,7 +33,6 @@ class AuditService:
             notes=notes,
         )
         session.add(audit_log)
-        await session.flush()
         logger.info(
             "Audit log recorded",
             document_id=str(document_id),

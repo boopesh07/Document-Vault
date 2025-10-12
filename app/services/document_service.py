@@ -87,7 +87,7 @@ class DocumentService:
             sha256_hash=sha256_hash,
             status=DocumentStatus.UPLOADED,
             uploaded_by=metadata.uploaded_by,
-            metadata_json=metadata.metadata,
+            metadata_json=metadata.metadata.model_dump() if metadata.metadata else None,
         )
         session.add(document)
         await session.flush()
@@ -179,7 +179,7 @@ class DocumentService:
                 },
             )
 
-        await session.flush()
+        
         logger.info("Document verification processed", document_id=str(document.id), status=document.status.value)
         return document
 
@@ -216,7 +216,7 @@ class DocumentService:
             },
         )
 
-        await session.flush()
+        
         return document
 
     async def list_documents(

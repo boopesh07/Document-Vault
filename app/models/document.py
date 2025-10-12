@@ -40,10 +40,14 @@ class DocumentType(str, PyEnum):
 class Document(PrimaryKeyUUIDMixin, TimestampMixin, Base):
     __tablename__ = "documents"
 
-    entity_type: Mapped[DocumentEntityType] = mapped_column(SAEnum(DocumentEntityType), nullable=False)
+    entity_type: Mapped[DocumentEntityType] = mapped_column(
+        SAEnum(DocumentEntityType, name="documententitytype", native_enum=False)
+    )
     entity_id: Mapped[Any] = mapped_column(GUID(), nullable=False)
     token_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    document_type: Mapped[DocumentType] = mapped_column(SAEnum(DocumentType), nullable=False)
+    document_type: Mapped[DocumentType] = mapped_column(
+        SAEnum(DocumentType, name="documenttype", native_enum=False)
+    )
 
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -56,7 +60,11 @@ class Document(PrimaryKeyUUIDMixin, TimestampMixin, Base):
     sha256_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     hash_verified_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
-    status: Mapped[DocumentStatus] = mapped_column(SAEnum(DocumentStatus), nullable=False, default=DocumentStatus.UPLOADED)
+    status: Mapped[DocumentStatus] = mapped_column(
+        SAEnum(DocumentStatus, name="documentstatus", native_enum=False),
+        nullable=False,
+        default=DocumentStatus.UPLOADED,
+    )
     on_chain_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     uploaded_by: Mapped[Any] = mapped_column(GUID(), nullable=False)
@@ -84,7 +92,9 @@ class DocumentAuditLog(PrimaryKeyUUIDMixin, Base):
     __tablename__ = "document_audit_logs"
 
     document_id: Mapped[Any] = mapped_column(GUID(), ForeignKey("documents.id"), nullable=False, index=True)
-    event_type: Mapped[DocumentAuditEvent] = mapped_column(SAEnum(DocumentAuditEvent), nullable=False)
+    event_type: Mapped[DocumentAuditEvent] = mapped_column(
+        SAEnum(DocumentAuditEvent, name="documentauditevent", native_enum=False)
+    )
     actor_id: Mapped[Any | None] = mapped_column(GUID(), nullable=True)
     actor_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
     context: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

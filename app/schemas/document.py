@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.document import DocumentAuditEvent, DocumentEntityType, DocumentStatus, DocumentType
+from app.models.document import Document, DocumentAuditLog, DocumentAuditEvent, DocumentEntityType, DocumentStatus, DocumentType
 
 
 class DocumentMetadata(BaseModel):
@@ -21,16 +22,7 @@ class DocumentUploadMetadata(BaseModel):
     document_type: DocumentType
     uploaded_by: UUID
     token_id: int | None = Field(default=None)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("metadata", mode="before")
-    @classmethod
-    def ensure_dict(cls, value: Any) -> dict[str, Any]:
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return value
-        raise TypeError("metadata must be a JSON object")
+    metadata: DocumentMetadata | None = Field(default=None)
 
 
 class DocumentVerifyRequest(BaseModel):
@@ -45,6 +37,7 @@ class DocumentDownloadResponse(BaseModel):
 
 
 class DocumentAuditLogEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: UUID
     event_type: DocumentAuditEvent
     actor_id: UUID | None
@@ -79,6 +72,40 @@ class DocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     audit_logs: list[DocumentAuditLogEntry] | None = None
+
+    @classmethod
+    def from_model(
+        cls, document: Document, audit_logs: Sequence[DocumentAuditLog] | None = None
+    ) -> "DocumentResponse":
+        if audit_logs is not None:
+            logs_source = list(audit_logs)
+        else:
+            logs_source = list(getattr(document, "_audit_logs_cache", []))
+
+        return cls(
+            id=document.id,
+            entity_type=document.entity_type,
+            entity_id=document.entity_id,
+            token_id=document.token_id,
+            document_type=document.document_type,
+            filename=document.filename,
+            mime_type=document.mime_type,
+            size_bytes=document.size_bytes,
+            storage_bucket=document.storage_bucket,
+            storage_key=document.storage_key,
+            sha256_hash=document.sha256_hash,
+            status=document.status,
+            uploaded_by=document.uploaded_by,
+            verified_by=document.verified_by,
+            archived_by=document.archived_by,
+            archived_at=document.archived_at,
+            hash_verified_at=document.hash_verified_at,
+            on_chain_reference=document.on_chain_reference,
+            metadata_json=document.metadata_json,
+            created_at=document.created_at,
+            updated_at=document.updated_at,
+            audit_logs=[DocumentAuditLogEntry.model_validate(log) for log in logs_source],
+        )
 
 
 class DocumentListResponse(BaseModel):

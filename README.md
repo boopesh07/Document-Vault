@@ -59,7 +59,7 @@ Dockerfile / .dockerignore
 
 | Variable                         | Description                                                                                         |
 |----------------------------------|-----------------------------------------------------------------------------------------------------|
-| `DATABASE_URL`                   | Supabase connection string (`postgresql+psycopg://...`).                                           |
+| `DATABASE_URL`                   | Supabase connection string (`postgresql+psycopg://...`). Use the **Transaction pooling** connection string with port `6543`. |
 | `DATABASE_POOL_PRE_PING`         | Toggle connection pre-ping; set `false` for async SQLite or local tests.                           |
 | `DOCUMENT_VAULT_BUCKET`          | Private S3 bucket for document binaries (versioning & default encryption enabled).                 |
 | `AWS_S3_KMS_KEY_ID`              | Customer-managed CMK ARN applied to S3 uploads.                                                    |
@@ -110,22 +110,65 @@ Navigate to `http://localhost:8000/docs` for interactive Swagger documentation.
 
 ## Database & Migrations
 
-- ORM: SQLAlchemy 2.x (async) with Alembic migrations.
-- Initial schema lives in `alembic/versions/20240601_01_create_documents.py`.
-- Commands:
+The database schema is managed with direct SQL scripts to ensure precise control, especially in production environments. The `alembic` directory is included in the repository but is not used for schema management against the production database.
 
-```bash
-# Generate new migration after model changes
-alembic revision --autogenerate -m "Describe change"
+### Manual Schema Setup
 
-# Apply migrations
-alembic upgrade head
+Run the following SQL script in your Supabase SQL editor or through a connected PostgreSQL client to set up the required tables and types.
 
-# Roll back one migration
-alembic downgrade -1
+```sql
+-- Create custom enum types if they don't already exist
+CREATE TYPE "documententitytype" AS ENUM ('issuer', 'investor', 'deal', 'token', 'compliance');
+CREATE TYPE "documenttype" AS ENUM ('operating_agreement', 'offering_memorandum', 'subscription', 'kyc', 'audit_report', 'other');
+CREATE TYPE "documentstatus" AS ENUM ('uploaded', 'verified', 'mismatch', 'archived');
+CREATE TYPE "documentauditevent" AS ENUM ('document.uploaded', 'document.verified', 'document.mismatch', 'document.archived', 'document.rehash_requested');
+
+-- Create the 'documents' table
+CREATE TABLE IF NOT EXISTS documents (
+    id UUID PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    entity_type VARCHAR(32) NOT NULL,
+    entity_id UUID NOT NULL,
+    token_id INTEGER,
+    document_type VARCHAR(32) NOT NULL,
+    filename VARCHAR(255) NOT NULL,
+    mime_type VARCHAR(255) NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    storage_bucket VARCHAR(63) NOT NULL,
+    storage_key VARCHAR(512) NOT NULL UNIQUE,
+    storage_version_id VARCHAR(255),
+    sha256_hash VARCHAR(128) NOT NULL,
+    hash_verified_at TIMESTAMPTZ,
+    status VARCHAR(16) NOT NULL,
+    on_chain_reference VARCHAR(255),
+    uploaded_by UUID NOT NULL,
+    verified_by UUID,
+    archived_by UUID,
+    archived_at TIMESTAMPTZ,
+    metadata JSONB
+);
+
+-- Create index on 'documents' table
+CREATE INDEX IF NOT EXISTS ix_documents_sha256_hash ON documents (sha256_hash);
+
+-- Create the 'document_audit_logs' table
+CREATE TABLE IF NOT EXISTS document_audit_logs (
+    id UUID PRIMARY KEY,
+    document_id UUID NOT NULL REFERENCES documents(id),
+    event_type VARCHAR(32) NOT NULL,
+    actor_id UUID,
+    actor_role VARCHAR(64),
+    context JSONB,
+    notes VARCHAR(1024),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Create index on 'document_audit_logs' table
+CREATE INDEX IF NOT EXISTS ix_document_audit_logs_document_id ON document_audit_logs (document_id);
 ```
 
-For Supabase, run migrations as part of your CI/CD pipeline prior to deploying new task revisions.
+> **Note**: The application uses SQLAlchemy models with `native_enum=False`, which stores enum values as `VARCHAR` fields in the database. If you have previously created the tables with native PostgreSQL `ENUM` types, you will need to run an `ALTER TABLE` script to convert them.
 
 ---
 

@@ -27,6 +27,9 @@ os.environ.setdefault("LOG_LEVEL", "INFO")
 os.environ.setdefault("LOG_FORMAT", "json")
 os.environ.setdefault("PRESIGNED_URL_EXPIRATION_SECONDS", "600")
 os.environ.setdefault("ACCESS_CONTROL_ALLOW_ALL", "true")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "test-access-key")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+os.environ.setdefault("AWS_SESSION_TOKEN", "test-session-token")
 
 from app.api.dependencies import _event_publisher, _storage_service, _document_service  # noqa: E402
 from app.core.config import settings  # noqa: E402

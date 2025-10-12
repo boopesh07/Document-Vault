@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # AWS / S3 storage
     aws_region: str = Field(..., alias="AWS_REGION")
     aws_profile: str | None = Field(default=None, alias="AWS_PROFILE")
+    aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
+    aws_session_token: str | None = Field(default=None, alias="AWS_SESSION_TOKEN")
     document_bucket: str = Field(..., alias="DOCUMENT_VAULT_BUCKET")
     s3_kms_key_id: str = Field(..., alias="AWS_S3_KMS_KEY_ID")
     s3_endpoint_url: AnyHttpUrl | None = Field(default=None, alias="AWS_S3_ENDPOINT_URL")
@@ -45,7 +48,15 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     log_format: Literal["json", "text"] = Field("json", alias="LOG_FORMAT")
 
-    @field_validator("aws_profile", "s3_endpoint_url", "blockchain_endpoint_url", mode="before")
+    @field_validator(
+        "aws_profile",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "s3_endpoint_url",
+        "blockchain_endpoint_url",
+        mode="before",
+    )
     @classmethod
     def blank_to_none(cls, value: str | None):
         if isinstance(value, str) and value.strip() == "":

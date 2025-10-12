@@ -13,7 +13,15 @@ class StorageService:
     CHUNK_SIZE = 1024 * 1024
 
     def __init__(self) -> None:
-        self._session = aioboto3.Session(profile_name=settings.aws_profile)
+        if not settings.aws_access_key_id or not settings.aws_secret_access_key:
+            raise RuntimeError("AWS access key id and secret access key must be configured.")
+
+        self._session = aioboto3.Session(
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+            aws_session_token=settings.aws_session_token,
+            region_name=settings.aws_region,
+        )
 
     async def upload_document(self, file_obj: BinaryIO, *, filename: str, mime_type: str) -> tuple[str, str | None]:
         object_key = f"documents/{uuid4()}/{filename}"

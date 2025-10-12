@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 import asyncio
 from logging.config import fileConfig
 from typing import Any
@@ -14,6 +16,8 @@ from app.models.base import Base
 
 # Import models so Alembic is aware of them
 from app import models  # noqa: F401
+
+sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), "..")))
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
