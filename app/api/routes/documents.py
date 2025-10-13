@@ -73,6 +73,8 @@ async def verify_document(
         document = await document_service.verify_document(
             session, document_id=payload.document_id, verifier_id=payload.verifier_id
         )
+        await session.flush()
+        await session.refresh(document)
         await session.commit()
         return DocumentResponse.from_model(document)
     except DocumentNotFoundError as exc:

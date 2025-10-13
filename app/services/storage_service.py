@@ -5,6 +5,7 @@ from typing import BinaryIO
 from uuid import uuid4
 
 import aioboto3
+from botocore.config import Config
 
 from app.core.config import settings
 
@@ -29,7 +30,10 @@ class StorageService:
         file_obj.seek(0)
         body = file_obj.read()
         async with self._session.client(
-            "s3", region_name=settings.aws_region, endpoint_url=settings.s3_endpoint_url
+            "s3",
+            region_name=settings.aws_region,
+            endpoint_url=settings.s3_endpoint_url,
+            config=Config(signature_version="s3v4"),
         ) as s3_client:
             await s3_client.put_object(
                 Bucket=settings.document_bucket,
@@ -46,7 +50,10 @@ class StorageService:
 
     async def stream_document(self, storage_key: str) -> AsyncIterator[bytes]:
         async with self._session.client(
-            "s3", region_name=settings.aws_region, endpoint_url=settings.s3_endpoint_url
+            "s3",
+            region_name=settings.aws_region,
+            endpoint_url=settings.s3_endpoint_url,
+            config=Config(signature_version="s3v4"),
         ) as s3_client:
             response = await s3_client.get_object(Bucket=settings.document_bucket, Key=storage_key)
             async for chunk in response["Body"].iter_chunks(chunk_size=self.CHUNK_SIZE):
@@ -54,7 +61,10 @@ class StorageService:
 
     async def generate_presigned_url(self, storage_key: str, expires_in_seconds: int) -> str:
         async with self._session.client(
-            "s3", region_name=settings.aws_region, endpoint_url=settings.s3_endpoint_url
+            "s3",
+            region_name=settings.aws_region,
+            endpoint_url=settings.s3_endpoint_url,
+            config=Config(signature_version="s3v4"),
         ) as s3_client:
             return await s3_client.generate_presigned_url(
                 ClientMethod="get_object",
