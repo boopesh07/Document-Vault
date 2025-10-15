@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     log_format: Literal["json", "text"] = Field("json", alias="LOG_FORMAT")
 
+    presigned_url_expiration_seconds: int = 3600
+    epr_mock_mode: bool = True
+
     @field_validator(
         "aws_profile",
         "aws_access_key_id",

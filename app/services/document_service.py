@@ -20,9 +20,9 @@ from app.models.document import (
     DocumentEntityType,
 )
 from app.schemas.document import DocumentUploadMetadata
-from app.services.access_control import AccessControlService
 from app.services.audit_service import AuditService
 from app.services.blockchain_service import BlockchainService
+from app.services.epr_service_mock import EprServiceMock
 from app.services.hashing_service import HashingService
 from app.services.storage_service import StorageService
 
@@ -39,7 +39,7 @@ class DocumentService:
         storage_service: StorageService,
         hashing_service: HashingService,
         audit_service: AuditService,
-        access_control_service: AccessControlService,
+        access_control_service: EprServiceMock,
         blockchain_service: BlockchainService,
         event_publisher: DocumentEventPublisher,
     ) -> None:
