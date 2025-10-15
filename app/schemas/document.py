@@ -71,17 +71,11 @@ class DocumentResponse(BaseModel):
     metadata: dict[str, Any] | None = Field(default=None, alias="metadata_json")
     created_at: datetime
     updated_at: datetime
-    audit_logs: list[DocumentAuditLogEntry] | None = None
 
     @classmethod
     def from_model(
         cls, document: Document, audit_logs: Sequence[DocumentAuditLog] | None = None
     ) -> "DocumentResponse":
-        if audit_logs is not None:
-            logs_source = list(audit_logs)
-        else:
-            logs_source = list(getattr(document, "_audit_logs_cache", []))
-
         return cls(
             id=document.id,
             entity_type=document.entity_type,
@@ -104,7 +98,6 @@ class DocumentResponse(BaseModel):
             metadata_json=document.metadata_json,
             created_at=document.created_at,
             updated_at=document.updated_at,
-            audit_logs=[DocumentAuditLogEntry.model_validate(log) for log in logs_source],
         )
 
 

@@ -74,7 +74,6 @@ async def verify_document(
             session, document_id=payload.document_id, verifier_id=payload.verifier_id
         )
         await session.flush()
-        await session.refresh(document)
         await session.commit()
         return DocumentResponse.from_model(document)
     except DocumentNotFoundError as exc:
@@ -96,7 +95,7 @@ async def list_documents(
     document_service: DocumentService = Depends(get_document_service),
 ):
     documents = await document_service.list_documents(session, entity_id=entity_id, entity_type=entity_type)
-    return DocumentListResponse(documents=[DocumentResponse.from_model(doc, []) for doc in documents])
+    return DocumentListResponse(documents=[DocumentResponse.from_model(doc) for doc in documents])
 
 
 @router.get("/{document_id}/download", response_model=DocumentDownloadResponse)
