@@ -11,13 +11,16 @@ logger = get_logger(component="EprServiceMock")
 class EprServiceMock:
     """A mock service that simulates the future Entity & Permissions Core (EPR)."""
 
-    async def is_authorized(self, *, user_id: UUID, action: str, resource_id: UUID) -> bool:
+    async def is_authorized(
+        self, *, user_id: UUID, action: str, resource_id: UUID, principal_type: str = "user"
+    ) -> bool:
         if settings.epr_mock_mode:
             logger.warning(
                 "EPR mock is enabled. Granting access by default.",
                 user_id=str(user_id),
                 action=action,
                 resource_id=str(resource_id),
+                principal_type=principal_type,
             )
             return True
 

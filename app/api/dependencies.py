@@ -1,32 +1,39 @@
-from fastapi import Depends
+from __future__ import annotations
+from functools import lru_cache
+import httpx
 
-from app.db.session import get_db_session
+from app.core.config import settings
 from app.events.publisher import DocumentEventPublisher
-from app.schemas.document import DocumentUploadMetadata
 from app.services.audit_service import AuditService
 from app.services.blockchain_service import BlockchainService
 from app.services.document_service import DocumentService
+from app.services.epr_service import EprService
 from app.services.epr_service_mock import EprServiceMock
 from app.services.hashing_service import HashingService
 from app.services.storage_service import StorageService
-from app.core.config import settings
-
-_storage_service = StorageService()
-_hashing_service = HashingService()
-_audit_service = AuditService()
-_epr_service_mock = EprServiceMock()
-_blockchain_service = BlockchainService()
-_event_publisher = DocumentEventPublisher()
-
-_document_service = DocumentService(
-    storage_service=_storage_service,
-    hashing_service=_hashing_service,
-    audit_service=_audit_service,
-    access_control_service=_epr_service_mock,
-    blockchain_service=_blockchain_service,
-    event_publisher=_event_publisher,
-)
 
 
+@lru_cache(maxsize=1)
+def get_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient()
+
+
+@lru_cache(maxsize=1)
+def get_access_control_service(
+    http_client: httpx.AsyncClient = get_http_client(),
+) -> EprService | EprServiceMock:
+    if settings.epr_mock_mode:
+        return EprServiceMock()
+    return EprService(http_client)
+
+
+@lru_cache(maxsize=1)
 def get_document_service() -> DocumentService:
-    return _document_service
+    return DocumentService(
+        storage_service=StorageService(),
+        hashing_service=HashingService(),
+        audit_service=AuditService(),
+        access_control_service=get_access_control_service(),
+        blockchain_service=BlockchainService(),
+        event_publisher=DocumentEventPublisher(),
+    )

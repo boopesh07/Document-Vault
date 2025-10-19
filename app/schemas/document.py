@@ -7,7 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.document import Document, DocumentAuditLog, DocumentAuditEvent, DocumentEntityType, DocumentStatus, DocumentType
+from app.models.audit import AuditLog
+from app.models.document import Document, DocumentAuditEvent, DocumentEntityType, DocumentStatus, DocumentType
 
 
 class DocumentMetadata(BaseModel):
@@ -39,12 +40,13 @@ class DocumentDownloadResponse(BaseModel):
 class DocumentAuditLogEntry(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
-    event_type: DocumentAuditEvent
+    action: DocumentAuditEvent
     actor_id: UUID | None
-    actor_role: str | None
-    notes: str | None
-    context: dict[str, Any] | None
+    actor_type: str | None
+    details: dict[str, Any]
     created_at: datetime
+    entity_id: UUID | None
+    entity_type: DocumentType | None
 
 
 class DocumentResponse(BaseModel):
@@ -74,7 +76,7 @@ class DocumentResponse(BaseModel):
 
     @classmethod
     def from_model(
-        cls, document: Document, audit_logs: Sequence[DocumentAuditLog] | None = None
+        cls, document: Document, audit_logs: Sequence[AuditLog] | None = None
     ) -> "DocumentResponse":
         return cls(
             id=document.id,

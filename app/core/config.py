@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Security & auth
     jwt_public_key: str | None = Field(default=None, alias="JWT_PUBLIC_KEY")
-    access_control_allow_all: bool = Field(True, alias="ACCESS_CONTROL_ALLOW_ALL")
+    epr_service_url: AnyHttpUrl | None = Field(default=None, alias="EPR_SERVICE_URL")
 
     # Database
     database_url: str = Field(..., alias="DATABASE_URL")
@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     # Queueing / events
     document_events_queue_url: str = Field(..., alias="DOCUMENT_EVENTS_QUEUE_URL")
 
+    # EPR Service
+    epr_service_url: AnyHttpUrl | None = Field(default=None, alias="EPR_SERVICE_URL")
+    epr_service_timeout: int = Field(default=5, alias="EPR_SERVICE_TIMEOUT")
+    epr_mock_mode: bool = Field(default=True, alias="EPR_MOCK_MODE")
+
+    @field_validator("epr_service_url", mode="before")
+    @classmethod
+    def _validate_epr_url(cls, v: str | None) -> str | None:
+        if v and v.startswith("tcp://"):
+            return v.replace("tcp://", "http://", 1)
+        return v
+
     # Blockchain integration (mocked for now)
     blockchain_endpoint_url: AnyHttpUrl | None = Field(default=None, alias="BLOCKCHAIN_ENDPOINT_URL")
 
@@ -49,7 +61,6 @@ class Settings(BaseSettings):
     log_format: Literal["json", "text"] = Field("json", alias="LOG_FORMAT")
 
     presigned_url_expiration_seconds: int = 3600
-    epr_mock_mode: bool = True
 
     @field_validator(
         "aws_profile",
@@ -58,6 +69,7 @@ class Settings(BaseSettings):
         "aws_session_token",
         "s3_endpoint_url",
         "blockchain_endpoint_url",
+        "epr_service_url",
         mode="before",
     )
     @classmethod

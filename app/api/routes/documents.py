@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, status, UploadFile
@@ -10,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_document_service
 from app.core.config import settings
 from app.db.session import get_db_session
-from app.models.document import Document, DocumentAuditLog, DocumentEntityType, DocumentType
+from app.models.document import DocumentEntityType, DocumentType
 from app.schemas.document import (
     DocumentDeleteResponse,
     DocumentDownloadResponse,

@@ -4,10 +4,8 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import Any
 
-from sqlalchemy import JSON, Enum as SAEnum, ForeignKey, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
-from sqlalchemy.types import DateTime
+from sqlalchemy import JSON, Enum as SAEnum, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, PrimaryKeyUUIDMixin, TimestampMixin
 from app.models.types import GUID
@@ -74,10 +72,6 @@ class Document(PrimaryKeyUUIDMixin, TimestampMixin, Base):
 
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, nullable=True)
 
-    audit_logs: Mapped[list["DocumentAuditLog"]] = relationship(
-        "DocumentAuditLog", back_populates="document", cascade="all, delete-orphan"
-    )
-
 
 
 class DocumentAuditEvent(str, PyEnum):
@@ -86,19 +80,3 @@ class DocumentAuditEvent(str, PyEnum):
     MISMATCH = "document.mismatch"
     ARCHIVED = "document.archived"
     REHASH_REQUESTED = "document.rehash_requested"
-
-
-class DocumentAuditLog(PrimaryKeyUUIDMixin, Base):
-    __tablename__ = "document_audit_logs"
-
-    document_id: Mapped[Any] = mapped_column(GUID(), ForeignKey("documents.id"), nullable=False, index=True)
-    event_type: Mapped[DocumentAuditEvent] = mapped_column(
-        SAEnum(DocumentAuditEvent, name="documentauditevent", native_enum=False)
-    )
-    actor_id: Mapped[Any | None] = mapped_column(GUID(), nullable=True)
-    actor_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    context: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    notes: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    document: Mapped["Document"] = relationship("Document", back_populates="audit_logs")

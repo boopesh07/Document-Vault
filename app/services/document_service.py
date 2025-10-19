@@ -7,7 +7,6 @@ from uuid import UUID
 
 from fastapi import UploadFile
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -22,6 +21,7 @@ from app.models.document import (
 from app.schemas.document import DocumentUploadMetadata
 from app.services.audit_service import AuditService
 from app.services.blockchain_service import BlockchainService
+from app.services.epr_service import EprService
 from app.services.epr_service_mock import EprServiceMock
 from app.services.hashing_service import HashingService
 from app.services.storage_service import StorageService
@@ -39,7 +39,7 @@ class DocumentService:
         storage_service: StorageService,
         hashing_service: HashingService,
         audit_service: AuditService,
-        access_control_service: EprServiceMock,
+        access_control_service: EprService | EprServiceMock,
         blockchain_service: BlockchainService,
         event_publisher: DocumentEventPublisher,
     ) -> None:
@@ -94,7 +94,7 @@ class DocumentService:
 
         audit_log = await self.audit_service.log_event(
             session,
-            document_id=document.id,
+            document=document,
             event_type=DocumentAuditEvent.UPLOAD,
             actor_id=metadata.uploaded_by,
             actor_role="uploader",
@@ -143,7 +143,7 @@ class DocumentService:
             )
             audit_log = await self.audit_service.log_event(
                 session,
-                document_id=document.id,
+                document=document,
                 event_type=DocumentAuditEvent.VERIFIED,
                 actor_id=verifier_id,
                 actor_role="verifier",
@@ -162,7 +162,7 @@ class DocumentService:
             document.status = DocumentStatus.MISMATCH
             audit_log = await self.audit_service.log_event(
                 session,
-                document_id=document.id,
+                document=document,
                 event_type=DocumentAuditEvent.MISMATCH,
                 actor_id=verifier_id,
                 actor_role="verifier",
@@ -200,7 +200,7 @@ class DocumentService:
 
         audit_log = await self.audit_service.log_event(
             session,
-            document_id=document.id,
+            document=document,
             event_type=DocumentAuditEvent.ARCHIVED,
             actor_id=archived_by,
             actor_role="admin",
@@ -223,9 +223,7 @@ class DocumentService:
         self, session: AsyncSession, *, entity_id: UUID, entity_type: DocumentEntityType
     ) -> Sequence[Document]:
         result = await session.execute(
-            select(Document)
-            .options(selectinload(Document.audit_logs))
-            .where(Document.entity_id == entity_id, Document.entity_type == entity_type)
+            select(Document).where(Document.entity_id == entity_id, Document.entity_type == entity_type)
         )
         return result.scalars().all()
 

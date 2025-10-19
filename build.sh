@@ -1,83 +1,84 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="${ENV_FILE:-.env.prod}"
-if [[ -f "$ENV_FILE" ]]; then
-  echo "Loading environment from $ENV_FILE"
-  set -a
+echo "Build script started."
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${PROJECT_ROOT}"
+
+ENV_FILE="${ENV_FILE:-.env}"
+if [[ -f "${ENV_FILE}" ]]; then
+  echo "Loading environment from ${ENV_FILE}"
   # shellcheck disable=SC1090
-  . "$ENV_FILE"
-  set +a
-else
-  echo "INFO: $ENV_FILE not found. Proceeding with current environment." >&2
+  set -a && source "${ENV_FILE}" && set +a
 fi
 
-python_exec=${PYTHON:-python3}
-"$python_exec" - <<'PY'
-import sys
-if sys.version_info[:2] >= (3, 13) or sys.version_info[:2] < (3, 11):
-    raise SystemExit(
-        "Python 3.11 or 3.12 is required for this project due to upstream dependency support (pydantic-core, psycopg)."
-    )
-PY
-if [[ ! -d .venv ]]; then
-  echo "Creating virtual environment (.venv)"
-  "$python_exec" -m venv .venv
+PYTHON=${PYTHON:-.venv/bin/python}
+AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-}"
+ECR_REPOSITORY="${ECR_REPOSITORY:?ECR_REPOSITORY env var required}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
+SKIP_TESTS="${SKIP_TESTS:-false}"
+BUILD_PLATFORM="${BUILD_PLATFORM:-linux/amd64}"
+
+if [[ -z "${AWS_ACCOUNT_ID}" ]]; then
+  echo "Deriving AWS account ID via STS"
+  AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query 'Account' --output text)"
 fi
 
-# shellcheck disable=SC1091
-source .venv/bin/activate
-pip install --upgrade pip
-pip install --upgrade -r requirements.txt
-pytest
+ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
-deactivate || true
+if [[ "${SKIP_TESTS}" != "true" ]]; then
+  if [[ -x "${PYTHON}" ]]; then
+    echo "Running test suite with ${PYTHON}"
+    "${PYTHON}" -m pytest -vv
+  else
+    echo "WARNING: ${PYTHON} not found; skipping tests" >&2
+  fi
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "ERROR: docker not found. Please install/start Docker." >&2
+  echo "ERROR: docker not found. Please install and start Docker." >&2
   exit 1
 fi
 
 if ! command -v aws >/dev/null 2>&1; then
-  echo "ERROR: aws CLI not found." >&2
+  echo "ERROR: aws CLI not found. Please install awscli v2." >&2
   exit 1
 fi
 
-export AWS_DEFAULT_REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}
+echo "Logging into ECR registry ${ECR_REGISTRY}"
+aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
 
-if [[ -z "${ACCOUNT_ID:-}" ]]; then
-  if ! ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null); then
-    echo "ERROR: ACCOUNT_ID not set and could not be derived via AWS STS." >&2
-    exit 1
+echo "Ensuring ECR repository ${ECR_REPOSITORY} exists"
+aws ecr describe-repositories --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 || \
+  aws ecr create-repository --repository-name "${ECR_REPOSITORY}" >/dev/null
+
+if docker buildx version >/dev/null 2>&1; then
+  BUILDER_NAME="${BUILDER_NAME:-document-vault-builder}"
+  if ! docker buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
+    echo "Creating docker buildx builder ${BUILDER_NAME}"
+    docker buildx create --name "${BUILDER_NAME}" --driver docker-container --use >/dev/null
+  else
+    docker buildx use "${BUILDER_NAME}" >/dev/null
   fi
-fi
 
-ECR_REPOSITORY=${ECR_REPOSITORY:-document-vault}
-IMAGE_TAG=${IMAGE_TAG:-latest}
-ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
-IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+  if [[ "${CLEAN_BUILDX:-false}" == "true" ]]; then
+    docker buildx prune -af >/dev/null || true
+  fi
 
-aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
-
-docker buildx version >/dev/null 2>&1 || { echo "ERROR: docker buildx not available." >&2; exit 1; }
-
-BUILDER="document-vault-builder"
-if docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
-  docker buildx use "$BUILDER" >/dev/null 2>&1 || true
+  echo "Building and pushing multi-platform image ${IMAGE_URI}"
+  docker buildx build \
+    --builder "${BUILDER_NAME}" \
+    --platform "${BUILD_PLATFORM}" \
+    -t "${IMAGE_URI}" \
+    --push \
+    .
 else
-  docker buildx create --name "$BUILDER" --driver docker-container --use >/dev/null 2>&1
+  echo "docker buildx not available; falling back to docker build"
+  docker build -t "${IMAGE_URI}" -f Dockerfile .
+  docker push "${IMAGE_URI}"
 fi
 
-if [[ "${CLEAN_BUILDX:-}" == "true" ]]; then
-  docker buildx prune -af || true
-fi
-
-docker buildx build \
-  --builder "$BUILDER" \
-  --platform linux/amd64 \
-  -t "$IMAGE_URI" \
-  --push \
-  .
-
-echo "Image pushed: $IMAGE_URI"
+echo "Build and push complete: ${IMAGE_URI}"

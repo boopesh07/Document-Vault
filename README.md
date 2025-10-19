@@ -22,7 +22,7 @@ The service provides:
 | Framework           | FastAPI + Pydantic v2                                                                                                                                                                                  |
 | Infrastructure      | AWS S3 (encrypted), AWS SQS, Supabase Postgres, CloudWatch Logs → Kinesis Firehose → S3 for audit retention, AWS ECS (Fargate)                                                                          |
 | Core modules        | `DocumentService` orchestrates hashing, storage, audit logging, event publishing, and blockchain integration (mocked).                                                                                   |
-| Data integrity      | SHA-256 hashing, on-chain registration (mock), periodic rehashing support, and append-only `document_audit_logs`.                                                                                       |
+| Data integrity      | SHA-256 hashing, on-chain registration (mock), periodic rehashing support, and append-only `audit_logs`.                                                                                                |
 | Security            | TLS enforced via AWS endpoints, S3 SSE-KMS, signed download URLs, future JWT verification hook, infrastructure secrets via `.env` or AWS Secrets Manager / SSM Parameter Store.                          |
 | Observability       | Structured JSON logging (structlog) → CloudWatch Logs, recommended Kinesis Firehose sink to encrypted S3 for immutable archival and analytics.                                                          |
 
@@ -39,7 +39,6 @@ app/
   models/             # SQLAlchemy models and custom types
   schemas/            # Pydantic schemas for request/response
   services/           # Domain services (storage, hashing, audit, blockchain mock)
-alembic/              # Migration environment and version scripts
 infra/ecs-task-def.json
 tests/                # Pytest suite using moto for AWS mocks
 build.sh / deploy.sh  # CI/CD helpers
@@ -95,8 +94,8 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env as needed (local Supabase URL, LocalStack S3/SQS endpoints, etc.)
 
-# 4. Run migrations (see next section)
-alembic upgrade head
+# 4. Ensure the database schema exists (see next section)
+# Apply the SQL snippet against your local database if the core service hasn't provisioned it yet.
 
 # 5. Start the API
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -110,20 +109,19 @@ Navigate to `http://localhost:8000/docs` for interactive Swagger documentation.
 
 ## Database & Migrations
 
-The database schema is managed with direct SQL scripts to ensure precise control, especially in production environments. The `alembic` directory is included in the repository but is not used for schema management against the production database.
+Schema migrations are managed centrally by the platform's core service, so this repository no longer includes Alembic configuration or migration scripts. For local development, ensure the upstream migrations have been applied or recreate the minimal schema using the snippet below.
 
 ### Manual Schema Setup
 
-Run the following SQL script in your Supabase SQL editor or through a connected PostgreSQL client to set up the required tables and types.
+Run the following SQL in your Supabase SQL editor (or any PostgreSQL client) if you need to bootstrap a fresh database yourself.
 
 ```sql
--- Create custom enum types if they don't already exist
+-- Optional enums for stricter validation
 CREATE TYPE "documententitytype" AS ENUM ('issuer', 'investor', 'deal', 'token', 'compliance');
 CREATE TYPE "documenttype" AS ENUM ('operating_agreement', 'offering_memorandum', 'subscription', 'kyc', 'audit_report', 'other');
 CREATE TYPE "documentstatus" AS ENUM ('uploaded', 'verified', 'mismatch', 'archived');
-CREATE TYPE "documentauditevent" AS ENUM ('document.uploaded', 'document.verified', 'document.mismatch', 'document.archived', 'document.rehash_requested');
 
--- Create the 'documents' table
+-- Documents
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -149,26 +147,28 @@ CREATE TABLE IF NOT EXISTS documents (
     metadata JSONB
 );
 
--- Create index on 'documents' table
 CREATE INDEX IF NOT EXISTS ix_documents_sha256_hash ON documents (sha256_hash);
 
--- Create the 'document_audit_logs' table
-CREATE TABLE IF NOT EXISTS document_audit_logs (
+-- Shared audit log table
+CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY,
-    document_id UUID NOT NULL REFERENCES documents(id),
-    event_type VARCHAR(32) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     actor_id UUID,
-    actor_role VARCHAR(64),
-    context JSONB,
-    notes VARCHAR(1024),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    actor_type VARCHAR(64) NOT NULL DEFAULT 'user',
+    entity_id UUID,
+    entity_type VARCHAR(64),
+    action VARCHAR(120) NOT NULL,
+    correlation_id VARCHAR(120),
+    details JSONB NOT NULL DEFAULT '{}'
 );
 
--- Create index on 'document_audit_logs' table
-CREATE INDEX IF NOT EXISTS ix_document_audit_logs_document_id ON document_audit_logs (document_id);
+CREATE INDEX IF NOT EXISTS ix_audit_logs_actor ON audit_logs (actor_id);
+CREATE INDEX IF NOT EXISTS ix_audit_logs_entity ON audit_logs (entity_id);
+CREATE INDEX IF NOT EXISTS ix_audit_logs_action ON audit_logs (action);
 ```
 
-> **Note**: The application uses SQLAlchemy models with `native_enum=False`, which stores enum values as `VARCHAR` fields in the database. If you have previously created the tables with native PostgreSQL `ENUM` types, you will need to run an `ALTER TABLE` script to convert them.
+> **Note**: SQLAlchemy stores enum values as `VARCHAR` columns (`native_enum=False`). If you provisioned earlier versions of the schema with native PostgreSQL `ENUM` types, adjust them to match the definitions above.
 
 ---
 
@@ -243,7 +243,7 @@ Extend payloads as downstream consumers evolve; maintain backwards compatibility
 
 - **Encryption in transit**: enforced via HTTPS endpoints for S3/SQS and TLS termination at load balancer or API gateway.
 - **Encryption at rest**: S3 uploads enforce `ServerSideEncryption=aws:kms` with `AWS_S3_KMS_KEY_ID`; enable bucket versioning and MFA delete.
-- **Audit logging**: Application logs → CloudWatch Logs → Kinesis Firehose → encrypted S3 (immutable). Database `document_audit_logs` provide structured audit events with user attribution.
+- **Audit logging**: Application logs → CloudWatch Logs → Kinesis Firehose → encrypted S3 (immutable). Database `audit_logs` provide structured audit events with user attribution.
 - **Access control**: Currently mocked (returns `True`). Replace `AccessControlService` with real microservice integration before production launch.
 - **Secrets management**: Prefer AWS Secrets Manager/SSM for database credentials, JWT keys, and blockchain endpoints. Reference them in ECS task definition via `secrets`.
 - **Networking**: Deploy ECS tasks in private subnets with VPC endpoints for S3/SQS/KMS. Enable security group egress restrictions.
