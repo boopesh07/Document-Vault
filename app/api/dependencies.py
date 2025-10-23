@@ -4,7 +4,7 @@ import httpx
 
 from app.core.config import settings
 from app.events.publisher import DocumentEventPublisher
-from app.services.audit_service import AuditService
+from app.services.audit_event_publisher import AuditEventPublisher
 from app.services.blockchain_service import BlockchainService
 from app.services.document_service import DocumentService
 from app.services.epr_service import EprService
@@ -32,7 +32,7 @@ def get_document_service() -> DocumentService:
     return DocumentService(
         storage_service=StorageService(),
         hashing_service=HashingService(),
-        audit_service=AuditService(),
+        audit_event_publisher=AuditEventPublisher(),
         access_control_service=get_access_control_service(),
         blockchain_service=BlockchainService(),
         event_publisher=DocumentEventPublisher(),

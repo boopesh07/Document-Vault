@@ -8,7 +8,8 @@ The service provides:
 - Strong hashing (SHA-256) with mock blockchain registration for tamper detection.
 - Encrypted document storage in AWS S3 (SSE-KMS) and signed URL distribution.
 - Event emission (`document.uploaded`, `document.verified`, `document.mismatch`, `document.archived`) over SQS for downstream systems.
-- Compliance-ready audit trails persisted in Postgres (Supabase).
+- Audit event publishing to centralized SNS topic consumed by the EPR (Entity & Permissions) service.
+- **Background consumer** that listens for entity deletion events and cascades document archival.
 - Cloud-native deployment targeting AWS Fargate (ECS) with Docker packaging.
 
 > Access control is currently mocked to always authorize requests. Replace `AccessControlService` when the dedicated microservice is available.
@@ -20,9 +21,10 @@ The service provides:
 | Concern             | Implementation                                                                                                                                                                                         |
 |---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Framework           | FastAPI + Pydantic v2                                                                                                                                                                                  |
-| Infrastructure      | AWS S3 (encrypted), AWS SQS, Supabase Postgres, CloudWatch Logs → Kinesis Firehose → S3 for audit retention, AWS ECS (Fargate)                                                                          |
-| Core modules        | `DocumentService` orchestrates hashing, storage, audit logging, event publishing, and blockchain integration (mocked).                                                                                   |
-| Data integrity      | SHA-256 hashing, on-chain registration (mock), periodic rehashing support, and append-only `audit_logs`.                                                                                                |
+| Infrastructure      | AWS S3 (encrypted), AWS SQS (document events), AWS SNS (audit events), Supabase Postgres (document metadata), CloudWatch Logs, AWS ECS (Fargate)                                                        |
+| Core modules        | `DocumentService` orchestrates hashing, storage, audit event publishing, document event publishing, and blockchain integration (mocked).                                                                 |
+| Data integrity      | SHA-256 hashing, on-chain registration (mock), periodic rehashing support.                                                                                                                              |
+| Audit trail         | Audit events published to centralized SNS topic (`arn:aws:sns:us-east-1:116981763412:epr-audit-events`) and consumed by the EPR service for persistence.                                               |
 | Security            | TLS enforced via AWS endpoints, S3 SSE-KMS, signed download URLs, future JWT verification hook, infrastructure secrets via `.env` or AWS Secrets Manager / SSM Parameter Store.                          |
 | Observability       | Structured JSON logging (structlog) → CloudWatch Logs, recommended Kinesis Firehose sink to encrypted S3 for immutable archival and analytics.                                                          |
 
@@ -63,10 +65,16 @@ Dockerfile / .dockerignore
 | `DOCUMENT_VAULT_BUCKET`          | Private S3 bucket for document binaries (versioning & default encryption enabled).                 |
 | `AWS_S3_KMS_KEY_ID`              | Customer-managed CMK ARN applied to S3 uploads.                                                    |
 | `DOCUMENT_EVENTS_QUEUE_URL`      | SQS queue URL for document events; configure DLQ & retention policies externally.                 |
+| `AUDIT_SNS_TOPIC_ARN`            | SNS topic ARN for audit events (`arn:aws:sns:us-east-1:116981763412:epr-audit-events`).            |
 | `PRESIGNED_URL_EXPIRATION_SECONDS` | Signed URL TTL (recommended < 3600s).                                                               |
+| `ENABLE_DOCUMENT_CONSUMER`       | Enable/disable the background consumer (`true`/`false`, default: `true`).                          |
+| `DOCUMENT_VAULT_SQS_URL`         | SQS queue URL subscribed to `epr-document-events` SNS topic for entity deletion events.            |
+| `DOCUMENT_CONSUMER_MAX_MESSAGES` | Max messages to retrieve per batch (default: `5`).                                                 |
+| `DOCUMENT_CONSUMER_WAIT_TIME`    | Long-polling wait time in seconds (default: `20`).                                                 |
+| `DOCUMENT_CONSUMER_VISIBILITY_TIMEOUT` | Message visibility timeout (optional, uses queue default if not set).                        |
 | `LOG_GROUP_NAME`                 | CloudWatch Logs group for ECS task logging.                                                        |
 | `ECS_EXECUTION_ROLE_ARN`         | Role granting ECS task permissions (ECR pull, CloudWatch logs).                                    |
-| `ECS_TASK_ROLE_ARN`              | Role granting runtime access to S3, SQS, KMS, Secrets Manager, etc.                                |
+| `ECS_TASK_ROLE_ARN`              | Role granting runtime access to S3, SQS, SNS, KMS, Secrets Manager, etc.                           |
 
 ---
 
@@ -148,25 +156,9 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 CREATE INDEX IF NOT EXISTS ix_documents_sha256_hash ON documents (sha256_hash);
-
--- Shared audit log table
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id UUID PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    actor_id UUID,
-    actor_type VARCHAR(64) NOT NULL DEFAULT 'user',
-    entity_id UUID,
-    entity_type VARCHAR(64),
-    action VARCHAR(120) NOT NULL,
-    correlation_id VARCHAR(120),
-    details JSONB NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS ix_audit_logs_actor ON audit_logs (actor_id);
-CREATE INDEX IF NOT EXISTS ix_audit_logs_entity ON audit_logs (entity_id);
-CREATE INDEX IF NOT EXISTS ix_audit_logs_action ON audit_logs (action);
 ```
+
+> **Note**: Audit logs are managed by the centralized EPR (Entity & Permissions) service. This service publishes audit events to an SNS topic which the EPR service consumes and persists.
 
 > **Note**: SQLAlchemy stores enum values as `VARCHAR` columns (`native_enum=False`). If you provisioned earlier versions of the schema with native PostgreSQL `ENUM` types, adjust them to match the definitions above.
 
@@ -239,14 +231,150 @@ Extend payloads as downstream consumers evolve; maintain backwards compatibility
 
 ---
 
+## Document Vault Consumer
+
+### Overview
+
+The Document Vault service includes a **background consumer** that automatically cascades document archival when entities are deleted from the system. This consumer runs as an asyncio task within the same FastAPI application container.
+
+### Architecture
+
+```
+EPR Service (entity deletion) 
+    ↓
+EPR_DOCUMENT_VAULT_TOPIC_ARN (SNS: arn:aws:sns:us-east-1:116981763412:epr-document-events)
+    ↓
+Document Vault SQS Queue (subscribed to SNS topic)
+    ↓
+Document Vault Consumer (background task in FastAPI app)
+    ↓
+Cascade Archive Documents
+```
+
+### Event Contract
+
+When an entity is deleted in the EPR service, it publishes an `entity.deleted` event:
+
+```json
+{
+  "event_id": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+  "source": "entity_permissions_core",
+  "action": "entity.deleted",
+  "entity_id": "<ENTITY_UUID>",
+  "entity_type": "issuer"
+}
+```
+
+Supported `entity_type` values: `issuer`, `investor`, `deal`, `token`, `compliance`
+
+### Consumer Behavior
+
+1. **Long-Polling**: Uses SQS long-polling (default 20s) for efficient message retrieval
+2. **Deduplication**: Tracks processed `event_id`s in the `processed_events` table to prevent duplicate processing
+3. **Transactional**: Archives all documents for the entity in a single database transaction
+4. **Acknowledgment**: Only deletes the SQS message after successful archival (rollback on failure)
+5. **Graceful Shutdown**: Stops processing on application shutdown, allows in-flight messages to complete
+6. **Error Handling**: Failed messages remain in queue for retry (visibility timeout controls retry timing)
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_DOCUMENT_CONSUMER` | `true` | Set to `false` to disable the consumer |
+| `DOCUMENT_VAULT_SQS_URL` | (required) | SQS queue URL subscribed to the SNS topic |
+| `DOCUMENT_CONSUMER_MAX_MESSAGES` | `5` | Batch size for SQS receive |
+| `DOCUMENT_CONSUMER_WAIT_TIME` | `20` | Long-polling wait time (seconds) |
+| `DOCUMENT_CONSUMER_VISIBILITY_TIMEOUT` | (queue default) | Message visibility timeout |
+
+### Setup Instructions
+
+1. **Create SQS Queue**:
+   ```bash
+   aws sqs create-queue \
+     --queue-name document-vault-entity-events \
+     --attributes VisibilityTimeout=60,MessageRetentionPeriod=1209600
+   ```
+
+2. **Subscribe Queue to SNS Topic**:
+   ```bash
+   aws sns subscribe \
+     --topic-arn arn:aws:sns:us-east-1:116981763412:epr-document-events \
+     --protocol sqs \
+     --notification-endpoint <SQS_QUEUE_ARN>
+   ```
+
+3. **Grant Queue Permissions**:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {"Service": "sns.amazonaws.com"},
+         "Action": "sqs:SendMessage",
+         "Resource": "<SQS_QUEUE_ARN>",
+         "Condition": {
+           "ArnEquals": {
+             "aws:SourceArn": "arn:aws:sns:us-east-1:116981763412:epr-document-events"
+           }
+         }
+       }
+     ]
+   }
+   ```
+
+4. **Set Environment Variable**:
+   ```bash
+   export DOCUMENT_VAULT_SQS_URL="https://sqs.us-east-1.amazonaws.com/123456789012/document-vault-entity-events"
+   ```
+
+5. **Restart Service**: The consumer starts automatically with the FastAPI application
+
+### Database Schema
+
+The consumer uses a `processed_events` table for deduplication:
+
+```sql
+CREATE TABLE IF NOT EXISTS processed_events (
+    id UUID PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_id VARCHAR(255) NOT NULL UNIQUE,
+    source VARCHAR(128) NOT NULL,
+    action VARCHAR(128) NOT NULL,
+    entity_id VARCHAR(255),
+    entity_type VARCHAR(64)
+);
+
+CREATE INDEX IF NOT EXISTS ix_processed_events_event_id ON processed_events (event_id);
+```
+
+### Monitoring
+
+Monitor consumer health via:
+- **Structured Logs**: Search for `component=DocumentVaultConsumer` in CloudWatch Logs
+- **SQS Metrics**: `ApproximateNumberOfMessagesVisible`, `ApproximateAgeOfOldestMessage`
+- **Application Logs**: Consumer startup/shutdown messages logged at INFO level
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Consumer not starting | Check `DOCUMENT_VAULT_SQS_URL` is set and `ENABLE_DOCUMENT_CONSUMER=true` |
+| Messages not being processed | Verify IAM role has `sqs:ReceiveMessage`, `sqs:DeleteMessage` permissions |
+| Duplicate processing | Check `processed_events` table for integrity constraint violations |
+| High message age | Increase `DOCUMENT_CONSUMER_MAX_MESSAGES` or reduce processing time |
+
+---
+
 ## Security & Compliance Notes
 
-- **Encryption in transit**: enforced via HTTPS endpoints for S3/SQS and TLS termination at load balancer or API gateway.
+- **Encryption in transit**: enforced via HTTPS endpoints for S3/SQS/SNS and TLS termination at load balancer or API gateway.
 - **Encryption at rest**: S3 uploads enforce `ServerSideEncryption=aws:kms` with `AWS_S3_KMS_KEY_ID`; enable bucket versioning and MFA delete.
-- **Audit logging**: Application logs → CloudWatch Logs → Kinesis Firehose → encrypted S3 (immutable). Database `audit_logs` provide structured audit events with user attribution.
+- **Audit logging**: Audit events published to centralized SNS topic (`arn:aws:sns:us-east-1:116981763412:epr-audit-events`) and consumed by the EPR service for persistence. Application logs → CloudWatch Logs → Kinesis Firehose → encrypted S3 (immutable).
 - **Access control**: Currently mocked (returns `True`). Replace `AccessControlService` with real microservice integration before production launch.
 - **Secrets management**: Prefer AWS Secrets Manager/SSM for database credentials, JWT keys, and blockchain endpoints. Reference them in ECS task definition via `secrets`.
-- **Networking**: Deploy ECS tasks in private subnets with VPC endpoints for S3/SQS/KMS. Enable security group egress restrictions.
+- **Networking**: Deploy ECS tasks in private subnets with VPC endpoints for S3/SQS/SNS/KMS. Enable security group egress restrictions.
 
 ---
 
@@ -265,8 +393,8 @@ Extend payloads as downstream consumers evolve; maintain backwards compatibility
 ## Troubleshooting
 
 - **Dependencies fail to install offline**: mirror Python packages locally or configure a private PyPI proxy; scripts assume outbound network access.
-- **`pytest` cannot locate AWS services**: ensure environment variables align with moto defaults (`AWS_REGION`, `DOCUMENT_VAULT_BUCKET`).
-- **ECS task IAM errors**: confirm task role grants `s3:PutObject`, `s3:GetObject`, `kms:Encrypt/Decrypt`, `sqs:SendMessage`, and read access to Secrets Manager parameters.
+- **`pytest` cannot locate AWS services**: ensure environment variables align with moto defaults (`AWS_REGION`, `DOCUMENT_VAULT_BUCKET`, `AUDIT_SNS_TOPIC_ARN`).
+- **ECS task IAM errors**: confirm task role grants `s3:PutObject`, `s3:GetObject`, `kms:Encrypt/Decrypt`, `sqs:SendMessage`, `sns:Publish` (for audit events), and read access to Secrets Manager parameters.
 
 ---
 

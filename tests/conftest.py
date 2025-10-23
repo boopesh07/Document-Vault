@@ -20,6 +20,7 @@ os.environ.setdefault("DATABASE_POOL_PRE_PING", "false")
 os.environ.setdefault("DOCUMENT_VAULT_BUCKET", "document-vault-test")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+os.environ.setdefault("AUDIT_SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:116981763412:epr-audit-events")
 
 from app.api import dependencies as dependencies_module
 from app.db.session import AsyncSessionFactory, engine

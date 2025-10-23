@@ -40,6 +40,14 @@ class Settings(BaseSettings):
 
     # Queueing / events
     document_events_queue_url: str = Field(..., alias="DOCUMENT_EVENTS_QUEUE_URL")
+    audit_sns_topic_arn: str = Field(..., alias="AUDIT_SNS_TOPIC_ARN")
+    
+    # Document Vault Consumer (entity deletion events)
+    enable_document_consumer: bool = Field(default=True, alias="ENABLE_DOCUMENT_CONSUMER")
+    document_vault_sqs_url: str | None = Field(default=None, alias="DOCUMENT_VAULT_SQS_URL")
+    document_consumer_max_messages: int = Field(default=5, alias="DOCUMENT_CONSUMER_MAX_MESSAGES")
+    document_consumer_wait_time: int = Field(default=20, alias="DOCUMENT_CONSUMER_WAIT_TIME")
+    document_consumer_visibility_timeout: int | None = Field(default=None, alias="DOCUMENT_CONSUMER_VISIBILITY_TIMEOUT")
 
     # EPR Service
     epr_service_url: AnyHttpUrl | None = Field(default=None, alias="EPR_SERVICE_URL")

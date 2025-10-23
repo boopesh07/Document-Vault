@@ -19,7 +19,7 @@ from app.models.document import (
     DocumentEntityType,
 )
 from app.schemas.document import DocumentUploadMetadata
-from app.services.audit_service import AuditService
+from app.services.audit_event_publisher import AuditEventPublisher
 from app.services.blockchain_service import BlockchainService
 from app.services.epr_service import EprService
 from app.services.epr_service_mock import EprServiceMock
@@ -38,14 +38,14 @@ class DocumentService:
         self,
         storage_service: StorageService,
         hashing_service: HashingService,
-        audit_service: AuditService,
+        audit_event_publisher: AuditEventPublisher,
         access_control_service: EprService | EprServiceMock,
         blockchain_service: BlockchainService,
         event_publisher: DocumentEventPublisher,
     ) -> None:
         self.storage_service = storage_service
         self.hashing_service = hashing_service
-        self.audit_service = audit_service
+        self.audit_event_publisher = audit_event_publisher
         self.access_control_service = access_control_service
         self.blockchain_service = blockchain_service
         self.event_publisher = event_publisher
@@ -92,15 +92,21 @@ class DocumentService:
         session.add(document)
         await session.flush()
 
-        audit_log = await self.audit_service.log_event(
-            session,
-            document=document,
-            event_type=DocumentAuditEvent.UPLOAD,
+        # Publish audit event to centralized SNS topic
+        await self.audit_event_publisher.publish_event(
+            action=DocumentAuditEvent.UPLOAD.value,
             actor_id=metadata.uploaded_by,
-            actor_role="uploader",
-            context={"filename": document.filename, "mime_type": document.mime_type},
+            actor_type="user",
+            entity_id=document.id,
+            entity_type="document",
+            details={
+                "filename": document.filename,
+                "mime_type": document.mime_type,
+                "entity_type": document.entity_type.value,
+                "entity_id": str(document.entity_id),
+                "document_type": document.document_type.value,
+            },
         )
-        document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
 
         await self.event_publisher.publish(
             event_type=DocumentAuditEvent.UPLOAD.value,
@@ -141,14 +147,18 @@ class DocumentService:
                 document_hash=document.sha256_hash,
                 metadata_uri=None,
             )
-            audit_log = await self.audit_service.log_event(
-                session,
-                document=document,
-                event_type=DocumentAuditEvent.VERIFIED,
+            # Publish audit event to centralized SNS topic
+            await self.audit_event_publisher.publish_event(
+                action=DocumentAuditEvent.VERIFIED.value,
                 actor_id=verifier_id,
-                actor_role="verifier",
+                actor_type="user",
+                entity_id=document.id,
+                entity_type="document",
+                details={
+                    "sha256_hash": document.sha256_hash,
+                    "on_chain_reference": document.on_chain_reference,
+                },
             )
-            document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
             await self.event_publisher.publish(
                 event_type=DocumentAuditEvent.VERIFIED.value,
                 payload={
@@ -160,15 +170,18 @@ class DocumentService:
             )
         else:
             document.status = DocumentStatus.MISMATCH
-            audit_log = await self.audit_service.log_event(
-                session,
-                document=document,
-                event_type=DocumentAuditEvent.MISMATCH,
+            # Publish audit event to centralized SNS topic
+            await self.audit_event_publisher.publish_event(
+                action=DocumentAuditEvent.MISMATCH.value,
                 actor_id=verifier_id,
-                actor_role="verifier",
-                context={"expected_hash": document.sha256_hash, "calculated_hash": calculated_hash},
+                actor_type="user",
+                entity_id=document.id,
+                entity_type="document",
+                details={
+                    "expected_hash": document.sha256_hash,
+                    "calculated_hash": calculated_hash,
+                },
             )
-            document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
             await self.event_publisher.publish(
                 event_type=DocumentAuditEvent.MISMATCH.value,
                 payload={
@@ -198,14 +211,17 @@ class DocumentService:
         document.archived_at = datetime.now(tz=timezone.utc)
         document.archived_by = archived_by
 
-        audit_log = await self.audit_service.log_event(
-            session,
-            document=document,
-            event_type=DocumentAuditEvent.ARCHIVED,
+        # Publish audit event to centralized SNS topic
+        await self.audit_event_publisher.publish_event(
+            action=DocumentAuditEvent.ARCHIVED.value,
             actor_id=archived_by,
-            actor_role="admin",
+            actor_type="user",
+            entity_id=document.id,
+            entity_type="document",
+            details={
+                "archived_at": document.archived_at.isoformat(),
+            },
         )
-        document.__dict__.setdefault("_audit_logs_cache", []).append(audit_log)
 
         await self.event_publisher.publish(
             event_type=DocumentAuditEvent.ARCHIVED.value,
@@ -251,3 +267,76 @@ class DocumentService:
         if document is None:
             raise DocumentNotFoundError(f"Document {document_id} not found")
         return document
+
+    async def cascade_archive_by_entity(
+        self, session: AsyncSession, *, entity_id: UUID, entity_type: DocumentEntityType, archived_by: UUID | None = None
+    ) -> int:
+        """
+        Archive all documents associated with a given entity.
+        
+        This is typically called when an entity is deleted from the system,
+        and we need to cascade the archival to all related documents.
+        
+        Args:
+            session: Database session
+            entity_id: UUID of the entity being deleted
+            entity_type: Type of the entity (issuer, investor, deal, etc.)
+            archived_by: Optional UUID of the user/system performing the archival
+        
+        Returns:
+            Number of documents archived
+        """
+        # Query all non-archived documents for this entity
+        result = await session.execute(
+            select(Document).where(
+                Document.entity_id == entity_id,
+                Document.entity_type == entity_type,
+                Document.status != DocumentStatus.ARCHIVED
+            )
+        )
+        documents = result.scalars().all()
+        
+        archived_count = 0
+        now = datetime.now(tz=timezone.utc)
+        
+        for document in documents:
+            document.status = DocumentStatus.ARCHIVED
+            document.archived_at = now
+            document.archived_by = archived_by
+            
+            # Publish audit event for each archived document
+            await self.audit_event_publisher.publish_event(
+                action=DocumentAuditEvent.ARCHIVED.value,
+                actor_id=archived_by,
+                actor_type="system",
+                entity_id=document.id,
+                entity_type="document",
+                details={
+                    "archived_at": now.isoformat(),
+                    "reason": "entity_deleted",
+                    "source_entity_id": str(entity_id),
+                    "source_entity_type": entity_type.value,
+                },
+            )
+            
+            # Publish document event
+            await self.event_publisher.publish(
+                event_type=DocumentAuditEvent.ARCHIVED.value,
+                payload={
+                    "document_id": str(document.id),
+                    "entity_id": str(entity_id),
+                    "entity_type": entity_type.value,
+                    "reason": "entity_deleted",
+                },
+            )
+            
+            archived_count += 1
+        
+        logger.info(
+            "Cascade archived documents for entity",
+            entity_id=str(entity_id),
+            entity_type=entity_type.value,
+            archived_count=archived_count,
+        )
+        
+        return archived_count

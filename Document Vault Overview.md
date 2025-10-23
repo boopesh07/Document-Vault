@@ -45,7 +45,7 @@ To ensure data integrity, every uploaded document is hashed using **SHA-256**. T
 Documents are stored in a private **AWS S3** bucket. All files are encrypted at rest using **server-side encryption with AWS KMS (SSE-KMS)**. Direct access to the S3 bucket is disallowed; all downloads are served through temporary, secure **presigned URLs**.
 
 ### Audit Trail
-Every significant action (upload, verification, archival) is recorded in the shared `audit_logs` table. This creates an immutable, compliance-ready audit trail that tracks who did what, and when.
+Every significant action (upload, verification, archival) publishes an audit event to a centralized SNS topic (`arn:aws:sns:us-east-1:116981763412:epr-audit-events`). The EPR (Entity & Permissions) service consumes these events and persists them in a centralized audit database. This creates an immutable, compliance-ready audit trail that tracks who did what, and when.
 
 ### Event-Driven Architecture
 The Document Vault is a decoupled service that communicates state changes through an event-driven model. It publishes events like `document.uploaded`, `document.verified`, and `document.archived` to an **AWS SQS** queue, allowing other microservices to react to document lifecycle events in real-time.
@@ -56,8 +56,8 @@ The Document Vault is a decoupled service that communicates state changes throug
 
 -   **`documents`** — The core table for document metadata.
     -   `id` (UUID), `entity_id` (UUID), `entity_type` (varchar), `document_type` (varchar), `filename` (varchar), `storage_bucket` (varchar), `storage_key` (varchar), `sha256_hash` (varchar), `status` (varchar), `uploaded_by` (UUID), `verified_by` (UUID), `archived_by` (UUID), `created_at` (timestamptz).
--   **`audit_logs`** — An immutable log of all actions performed across services.
-    -   `id` (UUID), `created_at` (timestamptz), `updated_at` (timestamptz), `actor_id` (UUID), `actor_type` (varchar), `entity_id` (UUID), `entity_type` (varchar), `action` (varchar), `correlation_id` (varchar), `details` (jsonb).
+
+> **Note**: Audit logs are managed centrally by the EPR service. This service publishes audit events to SNS (`arn:aws:sns:us-east-1:116981763412:epr-audit-events`).
 
 ---
 
@@ -112,3 +112,6 @@ The full interactive OpenAPI/Swagger documentation is available at `/docs` on th
 ---
 
 *Last updated: 2025-10-15*
+
+
+

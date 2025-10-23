@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.audit import AuditLog
 from app.models.document import Document, DocumentAuditEvent, DocumentEntityType, DocumentStatus, DocumentType
 
 
@@ -37,18 +35,6 @@ class DocumentDownloadResponse(BaseModel):
     expires_in_seconds: int
 
 
-class DocumentAuditLogEntry(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID
-    action: DocumentAuditEvent
-    actor_id: UUID | None
-    actor_type: str | None
-    details: dict[str, Any]
-    created_at: datetime
-    entity_id: UUID | None
-    entity_type: DocumentType | None
-
-
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -75,9 +61,7 @@ class DocumentResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_model(
-        cls, document: Document, audit_logs: Sequence[AuditLog] | None = None
-    ) -> "DocumentResponse":
+    def from_model(cls, document: Document) -> "DocumentResponse":
         return cls(
             id=document.id,
             entity_type=document.entity_type,

@@ -26,10 +26,15 @@
         {"name": "DOCUMENT_VAULT_BUCKET", "value": "<DOCUMENT_VAULT_BUCKET>"},
         {"name": "AWS_S3_KMS_KEY_ID", "value": "<AWS_S3_KMS_KEY_ID>"},
         {"name": "DOCUMENT_EVENTS_QUEUE_URL", "value": "<DOCUMENT_EVENTS_QUEUE_URL>"},
+        {"name": "AUDIT_SNS_TOPIC_ARN", "value": "<AUDIT_SNS_TOPIC_ARN>"},
         {"name": "PRESIGNED_URL_EXPIRATION_SECONDS", "value": "<PRESIGNED_URL_EXPIRATION_SECONDS>"},
         {"name": "LOG_LEVEL", "value": "<LOG_LEVEL>"},
         {"name": "EPR_SERVICE_URL", "value": "<EPR_SERVICE_URL>"},
-        {"name": "EPR_MOCK_MODE", "value": "<EPR_MOCK_MODE>"}
+        {"name": "EPR_MOCK_MODE", "value": "<EPR_MOCK_MODE>"},
+        {"name": "ENABLE_DOCUMENT_CONSUMER", "value": "<ENABLE_DOCUMENT_CONSUMER>"},
+        {"name": "DOCUMENT_VAULT_SQS_URL", "value": "<DOCUMENT_VAULT_SQS_URL>"},
+        {"name": "DOCUMENT_CONSUMER_MAX_MESSAGES", "value": "<DOCUMENT_CONSUMER_MAX_MESSAGES>"},
+        {"name": "DOCUMENT_CONSUMER_WAIT_TIME", "value": "<DOCUMENT_CONSUMER_WAIT_TIME>"}
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
