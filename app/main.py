@@ -10,7 +10,14 @@ from app.api.dependencies import get_document_service
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logger import configure_logging, get_logger
-from app.services.document_service import DocumentNotFoundError
+from app.services.document_service import (
+    DocumentNotFoundError,
+    DuplicateDocumentError,
+    FileSizeExceededError,
+    InvalidFileTypeError,
+    InvalidSignedUrlExpiryError,
+    UnauthorizedAccessError,
+)
 from app.workers.document_vault_consumer import build_consumer_from_env
 
 configure_logging()
@@ -63,6 +70,26 @@ def create_app() -> FastAPI:
     @app.exception_handler(DocumentNotFoundError)
     async def handle_not_found(_: Request, exc: DocumentNotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(InvalidFileTypeError)
+    async def handle_invalid_file_type(_: Request, exc: InvalidFileTypeError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc), "error_code": "INVALID_FILE_TYPE"})
+
+    @app.exception_handler(FileSizeExceededError)
+    async def handle_file_size_exceeded(_: Request, exc: FileSizeExceededError) -> JSONResponse:
+        return JSONResponse(status_code=413, content={"detail": str(exc), "error_code": "FILE_SIZE_EXCEEDED"})
+
+    @app.exception_handler(DuplicateDocumentError)
+    async def handle_duplicate_document(_: Request, exc: DuplicateDocumentError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc), "error_code": "DUPLICATE_DOCUMENT"})
+
+    @app.exception_handler(UnauthorizedAccessError)
+    async def handle_unauthorized_access(_: Request, exc: UnauthorizedAccessError) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": str(exc), "error_code": "UNAUTHORIZED_ACCESS"})
+
+    @app.exception_handler(InvalidSignedUrlExpiryError)
+    async def handle_invalid_expiry(_: Request, exc: InvalidSignedUrlExpiryError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc), "error_code": "INVALID_SIGNED_URL_EXPIRY"})
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # Queueing / events
     document_events_queue_url: str = Field(..., alias="DOCUMENT_EVENTS_QUEUE_URL")
     audit_sns_topic_arn: str = Field(..., alias="AUDIT_SNS_TOPIC_ARN")
+    compliance_alert_queue_url: str | None = Field(default=None, alias="COMPLIANCE_ALERT_QUEUE_URL")
     
     # Document Vault Consumer (entity deletion events)
     enable_document_consumer: bool = Field(default=True, alias="ENABLE_DOCUMENT_CONSUMER")
@@ -67,6 +68,23 @@ class Settings(BaseSettings):
     # Observability
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     log_format: Literal["json", "text"] = Field("json", alias="LOG_FORMAT")
+
+    # File Upload Validation
+    max_upload_file_size_bytes: int = Field(default=104857600, alias="MAX_UPLOAD_FILE_SIZE_BYTES")  # 100MB default
+    allowed_mime_types: list[str] = Field(
+        default=[
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/plain",
+            "image/jpeg",
+            "image/png",
+        ],
+        alias="ALLOWED_MIME_TYPES",
+    )
+    enable_duplicate_hash_detection: bool = Field(default=True, alias="ENABLE_DUPLICATE_HASH_DETECTION")
 
     presigned_url_expiration_seconds: int = 3600
 
