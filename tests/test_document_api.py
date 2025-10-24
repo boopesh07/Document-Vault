@@ -334,6 +334,11 @@ async def test_audit_event_emitted_on_upload(entity_id, user_id, document_id):
     mock_session = AsyncMock()
     mock_session.add = Mock()
     mock_session.flush = AsyncMock()
+    # Mock session.execute for duplicate check
+    mock_session.execute = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none = Mock(return_value=None)  # No duplicate
+    mock_session.execute.return_value = mock_result
 
     # Create upload metadata
     metadata = DocumentUploadMetadata(
@@ -656,3 +661,330 @@ async def test_audit_event_payload_schema_compliance():
     assert "MessageAttributes" in call_kwargs
     assert call_kwargs["MessageAttributes"]["action"]["StringValue"] == "document.uploaded"
     assert call_kwargs["MessageAttributes"]["source"]["StringValue"] == "document-vault-service"
+
+
+# ==================== Document Events (SQS/Internal Event Bus) Tests ====================
+
+
+@pytest.mark.anyio("asyncio")
+async def test_document_event_emitted_on_upload():
+    """Test that document.uploaded event is emitted to internal event bus (SQS) after storage."""
+    from app.services.audit_event_publisher import AuditEventPublisher
+    from app.services.document_service import DocumentService
+    from app.services.storage_service import StorageService
+    from app.services.hashing_service import HashingService
+    from app.services.blockchain_service import BlockchainService
+    from app.services.epr_service_mock import EprServiceMock
+    from app.events.publisher import DocumentEventPublisher
+    from app.schemas.document import DocumentUploadMetadata, DocumentMetadata
+    from app.models.document import DocumentEntityType, DocumentType
+    from unittest.mock import AsyncMock, MagicMock, Mock
+    from fastapi import UploadFile
+
+    entity_id = uuid4()
+    user_id = uuid4()
+
+    # Create mocks
+    mock_storage = MagicMock(spec=StorageService)
+    mock_storage.upload_document = AsyncMock(return_value=("s3-key", "version-1"))
+    
+    mock_hashing = MagicMock(spec=HashingService)
+    mock_hashing.compute_sha256 = Mock(return_value="a" * 64)
+    
+    mock_audit_publisher = MagicMock(spec=AuditEventPublisher)
+    mock_audit_publisher.publish_event = AsyncMock()
+    
+    mock_epr = MagicMock(spec=EprServiceMock)
+    mock_epr.is_authorized = AsyncMock(return_value=True)
+    
+    mock_blockchain = MagicMock(spec=BlockchainService)
+    mock_event_publisher = MagicMock(spec=DocumentEventPublisher)
+    mock_event_publisher.publish = AsyncMock()
+
+    # Create document service with mocked dependencies
+    document_service = DocumentService(
+        storage_service=mock_storage,
+        hashing_service=mock_hashing,
+        audit_event_publisher=mock_audit_publisher,
+        access_control_service=mock_epr,
+        blockchain_service=mock_blockchain,
+        event_publisher=mock_event_publisher,
+    )
+
+    # Create mock file and session
+    mock_file = MagicMock(spec=UploadFile)
+    mock_file.filename = "test.pdf"
+    mock_file.content_type = "application/pdf"
+    mock_file.file = MagicMock()
+    mock_file.file.read = Mock(return_value=b"test-content")
+    mock_file.file.seek = Mock()
+    mock_file.file.tell = Mock(return_value=100)
+
+    mock_session = AsyncMock()
+    mock_session.add = Mock()
+    mock_session.flush = AsyncMock()
+    # Mock session.execute for duplicate check
+    mock_session.execute = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none = Mock(return_value=None)  # No duplicate
+    mock_session.execute.return_value = mock_result
+
+    # Create upload metadata
+    metadata = DocumentUploadMetadata(
+        entity_id=entity_id,
+        entity_type=DocumentEntityType.ISSUER,
+        document_type=DocumentType.OPERATING_AGREEMENT,
+        uploaded_by=user_id,
+    )
+
+    # Execute upload
+    await document_service.upload_document(mock_session, file=mock_file, metadata=metadata)
+
+    # Verify document event was published to internal event bus (SQS)
+    mock_event_publisher.publish.assert_called_once()
+    call_kwargs = mock_event_publisher.publish.call_args[1]
+    
+    assert call_kwargs["event_type"] == "document.uploaded"
+    assert "payload" in call_kwargs
+    payload = call_kwargs["payload"]
+    assert "document_id" in payload
+    assert payload["entity_type"] == "issuer"
+    assert payload["entity_id"] == str(entity_id)
+    assert "sha256_hash" in payload
+    assert payload["status"] == "uploaded"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_document_event_emitted_on_verify_success():
+    """Test that document.verified event is emitted to internal event bus on valid re-hash."""
+    from app.services.audit_event_publisher import AuditEventPublisher
+    from app.services.document_service import DocumentService
+    from app.services.storage_service import StorageService
+    from app.services.hashing_service import HashingService
+    from app.services.blockchain_service import BlockchainService
+    from app.services.epr_service_mock import EprServiceMock
+    from app.events.publisher import DocumentEventPublisher
+    from app.models.document import Document, DocumentEntityType, DocumentType, DocumentStatus
+    from unittest.mock import AsyncMock, MagicMock, Mock
+
+    entity_id = uuid4()
+    user_id = uuid4()
+    document_id = uuid4()
+
+    # Create a mock document
+    mock_document = Document(
+        id=document_id,
+        entity_type=DocumentEntityType.ISSUER,
+        entity_id=entity_id,
+        document_type=DocumentType.OPERATING_AGREEMENT,
+        filename="test.pdf",
+        mime_type="application/pdf",
+        size_bytes=100,
+        storage_bucket="test-bucket",
+        storage_key="test-key",
+        sha256_hash="a" * 64,
+        status=DocumentStatus.UPLOADED,
+        uploaded_by=user_id,
+    )
+
+    # Create mocks
+    mock_storage = MagicMock(spec=StorageService)
+    
+    async def mock_stream():
+        yield b"test-content"
+    
+    mock_storage.stream_document = Mock(return_value=mock_stream())
+    
+    mock_hashing = MagicMock(spec=HashingService)
+    mock_hashing.create_digest = Mock(return_value=MagicMock(
+        update=Mock(),
+        hexdigest=Mock(return_value="a" * 64)
+    ))
+    
+    mock_audit_publisher = MagicMock(spec=AuditEventPublisher)
+    mock_audit_publisher.publish_event = AsyncMock()
+    
+    mock_epr = MagicMock(spec=EprServiceMock)
+    mock_epr.is_authorized = AsyncMock(return_value=True)
+    
+    mock_blockchain = MagicMock(spec=BlockchainService)
+    mock_blockchain.register_document = AsyncMock(return_value="tx-123")
+    
+    mock_event_publisher = MagicMock(spec=DocumentEventPublisher)
+    mock_event_publisher.publish = AsyncMock()
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock()
+    mock_session.execute.return_value.scalar_one_or_none = Mock(return_value=mock_document)
+
+    # Create document service
+    document_service = DocumentService(
+        storage_service=mock_storage,
+        hashing_service=mock_hashing,
+        audit_event_publisher=mock_audit_publisher,
+        access_control_service=mock_epr,
+        blockchain_service=mock_blockchain,
+        event_publisher=mock_event_publisher,
+    )
+
+    # Execute verification
+    await document_service.verify_document(mock_session, document_id=document_id, verifier_id=user_id)
+
+    # Verify document event was published to internal event bus
+    mock_event_publisher.publish.assert_called_once()
+    call_kwargs = mock_event_publisher.publish.call_args[1]
+    
+    assert call_kwargs["event_type"] == "document.verified"
+    assert "payload" in call_kwargs
+    payload = call_kwargs["payload"]
+    assert payload["document_id"] == str(document_id)
+    assert payload["entity_type"] == "issuer"
+    assert payload["entity_id"] == str(entity_id)
+    assert "sha256_hash" in payload
+
+
+@pytest.mark.anyio("asyncio")
+async def test_document_event_emitted_on_verify_mismatch():
+    """Test that document.mismatch event is emitted to internal event bus on corruption detection."""
+    from app.services.audit_event_publisher import AuditEventPublisher
+    from app.services.document_service import DocumentService
+    from app.services.storage_service import StorageService
+    from app.services.hashing_service import HashingService
+    from app.services.blockchain_service import BlockchainService
+    from app.services.epr_service_mock import EprServiceMock
+    from app.events.publisher import DocumentEventPublisher
+    from app.models.document import Document, DocumentEntityType, DocumentType, DocumentStatus
+    from unittest.mock import AsyncMock, MagicMock, Mock
+
+    entity_id = uuid4()
+    user_id = uuid4()
+    document_id = uuid4()
+
+    # Create a mock document with a specific hash
+    mock_document = Document(
+        id=document_id,
+        entity_type=DocumentEntityType.ISSUER,
+        entity_id=entity_id,
+        document_type=DocumentType.OPERATING_AGREEMENT,
+        filename="test.pdf",
+        mime_type="application/pdf",
+        size_bytes=100,
+        storage_bucket="test-bucket",
+        storage_key="test-key",
+        sha256_hash="original_hash_123",
+        status=DocumentStatus.UPLOADED,
+        uploaded_by=user_id,
+    )
+
+    # Create mocks
+    mock_storage = MagicMock(spec=StorageService)
+    
+    async def mock_stream():
+        yield b"corrupted-content"
+    
+    mock_storage.stream_document = Mock(return_value=mock_stream())
+    
+    mock_hashing = MagicMock(spec=HashingService)
+    mock_hashing.create_digest = Mock(return_value=MagicMock(
+        update=Mock(),
+        hexdigest=Mock(return_value="corrupted_hash_456")
+    ))
+    
+    mock_audit_publisher = MagicMock(spec=AuditEventPublisher)
+    mock_audit_publisher.publish_event = AsyncMock()
+    
+    mock_epr = MagicMock(spec=EprServiceMock)
+    mock_epr.is_authorized = AsyncMock(return_value=True)
+    
+    mock_blockchain = MagicMock(spec=BlockchainService)
+    mock_event_publisher = MagicMock(spec=DocumentEventPublisher)
+    mock_event_publisher.publish = AsyncMock()
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock()
+    mock_session.execute.return_value.scalar_one_or_none = Mock(return_value=mock_document)
+
+    # Create document service
+    document_service = DocumentService(
+        storage_service=mock_storage,
+        hashing_service=mock_hashing,
+        audit_event_publisher=mock_audit_publisher,
+        access_control_service=mock_epr,
+        blockchain_service=mock_blockchain,
+        event_publisher=mock_event_publisher,
+    )
+
+    # Execute verification
+    await document_service.verify_document(mock_session, document_id=document_id, verifier_id=user_id)
+
+    # Verify document event was published to internal event bus
+    mock_event_publisher.publish.assert_called_once()
+    call_kwargs = mock_event_publisher.publish.call_args[1]
+    
+    assert call_kwargs["event_type"] == "document.mismatch"
+    assert "payload" in call_kwargs
+    payload = call_kwargs["payload"]
+    assert payload["document_id"] == str(document_id)
+    assert payload["expected_hash"] == "original_hash_123"
+    assert payload["calculated_hash"] == "corrupted_hash_456"
+    assert payload["entity_id"] == str(entity_id)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_document_event_payload_schema_compliance():
+    """Test that document event payload conforms to internal event bus schema."""
+    from app.events.publisher import DocumentEventPublisher
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from uuid import uuid4
+    import json
+
+    document_id = uuid4()
+    entity_id = uuid4()
+
+    mock_sqs_client = MagicMock()
+    mock_sqs_client.send_message = AsyncMock()
+
+    publisher = DocumentEventPublisher()
+
+    # Patch the SQS client creation
+    with patch.object(publisher._session, 'client') as mock_client_context:
+        mock_client_context.return_value.__aenter__.return_value = mock_sqs_client
+        
+        await publisher.publish(
+            event_type="document.uploaded",
+            payload={
+                "document_id": str(document_id),
+                "entity_type": "issuer",
+                "entity_id": str(entity_id),
+                "sha256_hash": "a" * 64,
+                "status": "uploaded",
+            }
+        )
+
+    # Verify SQS send_message was called
+    mock_sqs_client.send_message.assert_called_once()
+    call_kwargs = mock_sqs_client.send_message.call_args[1]
+
+    # Parse the message body
+    message_body = json.loads(call_kwargs["MessageBody"])
+
+    # Validate schema compliance
+    assert "event_type" in message_body
+    assert message_body["event_type"] == "document.uploaded"
+    assert "occurred_at" in message_body
+    assert "payload" in message_body
+    
+    payload = message_body["payload"]
+    assert payload["document_id"] == str(document_id)
+    assert payload["entity_type"] == "issuer"
+    assert payload["entity_id"] == str(entity_id)
+    assert payload["sha256_hash"] == "a" * 64
+    assert payload["status"] == "uploaded"
+    
+    # Validate ISO-8601 timestamp format
+    from datetime import datetime
+    datetime.fromisoformat(message_body["occurred_at"].replace("Z", "+00:00"))
+
+    # Verify message attributes
+    assert "MessageAttributes" in call_kwargs
+    assert call_kwargs["MessageAttributes"]["event_type"]["StringValue"] == "document.uploaded"
