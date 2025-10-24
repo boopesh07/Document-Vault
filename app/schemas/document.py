@@ -29,6 +29,13 @@ class DocumentVerifyRequest(BaseModel):
     verifier_id: UUID
 
 
+class DocumentRelinkRequest(BaseModel):
+    new_entity_id: UUID
+    new_entity_type: DocumentEntityType
+    relinked_by: UUID
+    token_id: int | None = None
+
+
 class DocumentDownloadResponse(BaseModel):
     document_id: UUID
     download_url: str

@@ -404,6 +404,91 @@ class DocumentService:
         
         return document
 
+    async def relink_document(
+        self,
+        session: AsyncSession,
+        *,
+        document_id: UUID,
+        new_entity_id: UUID,
+        new_entity_type: DocumentEntityType,
+        relinked_by: UUID,
+        token_id: int | None = None,
+    ) -> Document:
+        """
+        Reassign a document to a different entity while preserving audit history.
+
+        Args:
+            session: Database session
+            document_id: Document being re-linked
+            new_entity_id: Entity to associate the document with
+            new_entity_type: Type of the new entity
+            relinked_by: User performing the relink
+            token_id: Optional token id to update (defaults to existing value)
+
+        Returns:
+            Updated document
+        """
+        document = await self._get_document(session, document_id)
+
+        is_allowed = await self.access_control_service.is_authorized(
+            user_id=relinked_by, action="document:relink", resource_id=new_entity_id
+        )
+        if not is_allowed:
+            logger.warning(
+                "Relink not authorized",
+                user_id=str(relinked_by),
+                document_id=str(document_id),
+                new_entity_id=str(new_entity_id),
+            )
+            raise PermissionError("Relink not authorized")
+
+        previous_entity_id = document.entity_id
+        previous_entity_type = document.entity_type
+
+        document.entity_id = new_entity_id
+        document.entity_type = new_entity_type
+        if token_id is not None:
+            document.token_id = token_id
+
+        await session.flush()
+
+        await self.audit_event_publisher.publish_event(
+            action=DocumentAuditEvent.RELINKED.value,
+            actor_id=relinked_by,
+            actor_type="user",
+            entity_id=document.id,
+            entity_type="document",
+            details={
+                "old_entity_id": str(previous_entity_id),
+                "old_entity_type": previous_entity_type.value,
+                "new_entity_id": str(new_entity_id),
+                "new_entity_type": new_entity_type.value,
+                "token_id": document.token_id,
+            },
+        )
+
+        await self.event_publisher.publish(
+            event_type=DocumentAuditEvent.RELINKED.value,
+            payload={
+                "document_id": str(document.id),
+                "old_entity_id": str(previous_entity_id),
+                "old_entity_type": previous_entity_type.value,
+                "new_entity_id": str(new_entity_id),
+                "new_entity_type": new_entity_type.value,
+                "relinked_by": str(relinked_by),
+            },
+        )
+
+        logger.info(
+            "Document relinked",
+            document_id=str(document.id),
+            old_entity_id=str(previous_entity_id),
+            new_entity_id=str(new_entity_id),
+            relinked_by=str(relinked_by),
+        )
+
+        return document
+
     async def list_documents(
         self, session: AsyncSession, *, entity_id: UUID, entity_type: DocumentEntityType, include_archived: bool = False
     ) -> Sequence[Document]:

@@ -16,6 +16,7 @@ from app.schemas.document import (
     DocumentListResponse,
     DocumentMetadata,
     DocumentResponse,
+    DocumentRelinkRequest,
     DocumentUploadMetadata,
     DocumentVerifyRequest,
 )
@@ -118,6 +119,35 @@ async def generate_download_url(
         download_url=url,
         expires_in_seconds=settings.presigned_url_expiration_seconds,
     )
+
+
+@router.post("/{document_id}/relink", response_model=DocumentResponse)
+async def relink_document(
+    document_id: UUID,
+    payload: DocumentRelinkRequest,
+    session: AsyncSession = Depends(get_db_session),
+    document_service: DocumentService = Depends(get_document_service),
+):
+    try:
+        document = await document_service.relink_document(
+            session,
+            document_id=document_id,
+            new_entity_id=payload.new_entity_id,
+            new_entity_type=payload.new_entity_type,
+            relinked_by=payload.relinked_by,
+            token_id=payload.token_id,
+        )
+        await session.commit()
+        return DocumentResponse.from_model(document)
+    except DocumentNotFoundError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except Exception:
+        await session.rollback()
+        raise
 
 
 @router.delete("/{document_id}", response_model=DocumentDeleteResponse)

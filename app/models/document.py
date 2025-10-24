@@ -79,4 +79,5 @@ class DocumentAuditEvent(str, PyEnum):
     VERIFIED = "document.verified"
     MISMATCH = "document.mismatch"
     ARCHIVED = "document.archived"
+    RELINKED = "document.relinked"
     REHASH_REQUESTED = "document.rehash_requested"

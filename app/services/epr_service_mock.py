@@ -90,10 +90,15 @@ class EprServiceMock:
         
         # Define role-based permissions
         role_actions = {
-            "issuer": {"document:upload", "document:download", "document:verify", "document:archive"},
+            "issuer": {"document:upload", "document:download", "document:verify", "document:archive", "document:relink"},
             "investor": {"document:download"},
             "auditor": {"document:download", "document:verify"},
-            "compliance_officer": {"document:download", "document:verify", "document:archive"},
+            "compliance_officer": {
+                "document:download",
+                "document:verify",
+                "document:archive",
+                "document:relink",
+            },
         }
         
         allowed_actions = role_actions.get(role, set())

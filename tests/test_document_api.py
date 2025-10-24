@@ -257,6 +257,38 @@ async def test_generate_download_url_permission_denied(async_client, aws_environ
     assert response.status_code == 403
 
 
+@pytest.mark.anyio("asyncio")
+async def test_relink_document_success(async_client, aws_environment, mock_document, document_id, user_id):
+    """Test relinking a document associates it with a new entity and returns updated metadata."""
+    from app.models.document import DocumentEntityType
+
+    mock_service = aws_environment["mock_document_service"]
+    mock_service.relink_document = AsyncMock(return_value=mock_document)
+
+    new_entity_id = uuid4()
+
+    response = await async_client.post(
+        f"/api/v1/documents/{document_id}/relink",
+        json={
+            "new_entity_id": str(new_entity_id),
+            "new_entity_type": "issuer",
+            "relinked_by": str(user_id),
+            "token_id": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(mock_document.id)
+
+    await_kwargs = mock_service.relink_document.await_args.kwargs
+    assert await_kwargs["document_id"] == document_id
+    assert await_kwargs["new_entity_id"] == new_entity_id
+    assert await_kwargs["new_entity_type"] == DocumentEntityType.ISSUER
+    assert await_kwargs["relinked_by"] == user_id
+    assert await_kwargs["token_id"] == 5
+
+
 # ==================== Document Archive Tests ====================
 
 
@@ -530,6 +562,105 @@ async def test_audit_event_emitted_on_verify_mismatch(entity_id, user_id, docume
     assert "calculated_hash" in call_kwargs["details"]
     assert call_kwargs["details"]["expected_hash"] == "original_hash_123"
     assert call_kwargs["details"]["calculated_hash"] == "corrupted_hash_456"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_audit_event_emitted_on_relink_success():
+    """Test that document.relinked audit event captures old and new entity information."""
+    from app.services.audit_event_publisher import AuditEventPublisher
+    from app.services.document_service import DocumentService
+    from app.services.storage_service import StorageService
+    from app.services.hashing_service import HashingService
+    from app.services.blockchain_service import BlockchainService
+    from app.services.epr_service_mock import EprServiceMock
+    from app.events.publisher import DocumentEventPublisher
+    from app.models.document import Document, DocumentEntityType, DocumentType, DocumentStatus
+    from unittest.mock import AsyncMock, MagicMock, Mock
+
+    # Existing document state
+    old_entity_id = uuid4()
+    new_entity_id = uuid4()
+    user_id = uuid4()
+    document_id = uuid4()
+
+    document = Document(
+        id=document_id,
+        entity_type=DocumentEntityType.ISSUER,
+        entity_id=old_entity_id,
+        document_type=DocumentType.OPERATING_AGREEMENT,
+        filename="test.pdf",
+        mime_type="application/pdf",
+        size_bytes=100,
+        storage_bucket="test-bucket",
+        storage_key="test-key",
+        sha256_hash="a" * 64,
+        status=DocumentStatus.UPLOADED,
+        uploaded_by=user_id,
+        token_id=10,
+    )
+
+    # Mock dependencies
+    mock_storage = MagicMock(spec=StorageService)
+    mock_hashing = MagicMock(spec=HashingService)
+    mock_audit_publisher = MagicMock(spec=AuditEventPublisher)
+    mock_audit_publisher.publish_event = AsyncMock()
+    mock_epr = MagicMock(spec=EprServiceMock)
+    mock_epr.is_authorized = AsyncMock(return_value=True)
+    mock_blockchain = MagicMock(spec=BlockchainService)
+    mock_event_publisher = MagicMock(spec=DocumentEventPublisher)
+    mock_event_publisher.publish = AsyncMock()
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none = Mock(return_value=document)
+    mock_session.execute.return_value = mock_result
+    mock_session.flush = AsyncMock()
+
+    document_service = DocumentService(
+        storage_service=mock_storage,
+        hashing_service=mock_hashing,
+        audit_event_publisher=mock_audit_publisher,
+        access_control_service=mock_epr,
+        blockchain_service=mock_blockchain,
+        event_publisher=mock_event_publisher,
+    )
+
+    await document_service.relink_document(
+        mock_session,
+        document_id=document_id,
+        new_entity_id=new_entity_id,
+        new_entity_type=DocumentEntityType.DEAL,
+        relinked_by=user_id,
+        token_id=20,
+    )
+
+    assert document.entity_id == new_entity_id
+    assert document.entity_type == DocumentEntityType.DEAL
+    assert document.token_id == 20
+    mock_session.flush.assert_awaited_once()
+
+    assert_audit_event_published(
+        mock_audit_publisher,
+        action="document.relinked",
+        actor_id=user_id,
+        entity_id=document_id,
+    )
+    audit_kwargs = mock_audit_publisher.publish_event.call_args[1]
+    details = audit_kwargs["details"]
+    assert details["old_entity_id"] == str(old_entity_id)
+    assert details["new_entity_id"] == str(new_entity_id)
+    assert details["old_entity_type"] == DocumentEntityType.ISSUER.value
+    assert details["new_entity_type"] == DocumentEntityType.DEAL.value
+    assert details["token_id"] == 20
+
+    mock_event_publisher.publish.assert_awaited_once()
+    event_kwargs = mock_event_publisher.publish.await_args.kwargs
+    assert event_kwargs["event_type"] == "document.relinked"
+    payload = event_kwargs["payload"]
+    assert payload["old_entity_id"] == str(old_entity_id)
+    assert payload["new_entity_id"] == str(new_entity_id)
+    assert payload["relinked_by"] == str(user_id)
 
 
 @pytest.mark.anyio("asyncio")
