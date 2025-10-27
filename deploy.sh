@@ -20,6 +20,7 @@ ECS_CLUSTER="${ECS_CLUSTER:?ECS_CLUSTER env var required}"
 ECS_SERVICE="${ECS_SERVICE:?ECS_SERVICE env var required}"
 TASK_FAMILY="${TASK_FAMILY:-document-vault}"
 CONTAINER_NAME="${CONTAINER_NAME:-document-vault}"
+CONTAINER_PORT="${CONTAINER_PORT:-8000}"
 TASK_CPU="${TASK_CPU:-512}"
 TASK_MEMORY="${TASK_MEMORY:-1024}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
@@ -43,9 +44,15 @@ ENABLE_DOCUMENT_CONSUMER="${ENABLE_DOCUMENT_CONSUMER:-true}"
 DOCUMENT_VAULT_SQS_URL="${DOCUMENT_VAULT_SQS_URL:-}"
 DOCUMENT_CONSUMER_MAX_MESSAGES="${DOCUMENT_CONSUMER_MAX_MESSAGES:-5}"
 DOCUMENT_CONSUMER_WAIT_TIME="${DOCUMENT_CONSUMER_WAIT_TIME:-20}"
+TARGET_GROUP_ARN="${TARGET_GROUP_ARN:-}"
 
 if [[ "${EPR_MOCK_MODE}" == "false" && -z "${EPR_SERVICE_URL}" ]]; then
   echo "ERROR: EPR_SERVICE_URL is required when EPR_MOCK_MODE is false." >&2
+  exit 1
+fi
+
+if [[ -z "${SUBNET_ID}" || -z "${SECURITY_GROUP_ID}" ]]; then
+  echo "ERROR: SUBNET_ID and SECURITY_GROUP_ID must be set." >&2
   exit 1
 fi
 
@@ -98,6 +105,8 @@ sed \
   -e "s|<AWS_REGION>|${AWS_REGION}|g" \
   -e "s|<DOCUMENT_VAULT_BUCKET>|${DOCUMENT_VAULT_BUCKET:?DOCUMENT_VAULT_BUCKET required}|g" \
   -e "s|<AWS_S3_KMS_KEY_ID>|${AWS_S3_KMS_KEY_ID:?AWS_S3_KMS_KEY_ID required}|g" \
+  -e "s|<AWS_ACCESS_KEY_ID>|${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID required}|g" \
+  -e "s|<AWS_SECRET_ACCESS_KEY>|${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY required}|g" \
   -e "s|<DOCUMENT_EVENTS_QUEUE_URL>|${DOCUMENT_EVENTS_QUEUE_URL:?DOCUMENT_EVENTS_QUEUE_URL required}|g" \
   -e "s|<AUDIT_SNS_TOPIC_ARN>|${AUDIT_SNS_TOPIC_ARN:?AUDIT_SNS_TOPIC_ARN required}|g" \
   -e "s|<PRESIGNED_URL_EXPIRATION_SECONDS>|${PRESIGNED_URL_EXPIRATION_SECONDS:-3600}|g" \
@@ -116,27 +125,37 @@ sed \
 TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "file://${RENDERED_TASK_DEF}" --query 'taskDefinition.taskDefinitionArn' --output text)
 echo "Registered task definition: ${TASK_DEF_ARN}"
 
+subnets_formatted=$(echo "$SUBNET_ID" | awk -F, '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i<NF?",":"")}')
+sgs_formatted=$(echo "$SECURITY_GROUP_ID" | awk -F, '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i<NF?",":"")}')
+NETWORK_CONFIGURATION="awsvpcConfiguration={subnets=[${subnets_formatted}],securityGroups=[${sgs_formatted}],assignPublicIp=${ECS_ASSIGN_PUBLIC_IP}}"
+LOAD_BALANCER_PARAM=""
+if [[ -n "${TARGET_GROUP_ARN}" ]]; then
+  LOAD_BALANCER_PARAM="targetGroupArn=${TARGET_GROUP_ARN},containerName=${CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
+fi
+
 SERVICE_STATUS=$(aws ecs describe-services --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" --query 'services[0].status' --output text 2>/dev/null | tr -d '\r\n' || echo "NOT_FOUND")
 
 if [[ "${SERVICE_STATUS}" == "ACTIVE" ]]; then
   echo "Updating existing ECS service ${ECS_SERVICE}"
-  aws ecs update-service \
-    --cluster "${ECS_CLUSTER}" \
-    --service "${ECS_SERVICE}" \
-    --task-definition "${TASK_DEF_ARN}" \
-    --desired-count "${DESIRED_COUNT}" \
-    --force-new-deployment \
-    --output text >/dev/null
+  UPDATE_ARGS=(
+    --cluster "${ECS_CLUSTER}"
+    --service "${ECS_SERVICE}"
+    --task-definition "${TASK_DEF_ARN}"
+    --network-configuration "${NETWORK_CONFIGURATION}"
+    --desired-count "${DESIRED_COUNT}"
+    --force-new-deployment
+  )
+  if [[ -n "${LOAD_BALANCER_PARAM}" ]]; then
+    UPDATE_ARGS+=(--load-balancers "${LOAD_BALANCER_PARAM}")
+  fi
+  UPDATE_ARGS+=(--output text)
+  aws ecs update-service "${UPDATE_ARGS[@]}" >/dev/null
 else
   echo "Creating ECS service ${ECS_SERVICE}"
-  if [[ -z "${SUBNET_ID}" || -z "${SECURITY_GROUP_ID}" ]]; then
-    echo "ERROR: SUBNET_ID and SECURITY_GROUP_ID are required to create a new service." >&2
+  if [[ -z "${LOAD_BALANCER_PARAM}" ]]; then
+    echo "ERROR: TARGET_GROUP_ARN is required to attach the service to the load balancer." >&2
     exit 1
   fi
-
-  subnets_formatted=$(echo "$SUBNET_ID" | awk -F, '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i<NF?",":"")}')
-  sgs_formatted=$(echo "$SECURITY_GROUP_ID" | awk -F, '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i<NF?",":"")}')
-  NETWORK_CONFIGURATION="awsvpcConfiguration={subnets=[${subnets_formatted}],securityGroups=[${sgs_formatted}],assignPublicIp=${ECS_ASSIGN_PUBLIC_IP}}"
 
   ARGS=(
     --cluster "${ECS_CLUSTER}"
@@ -146,6 +165,7 @@ else
     --launch-type "${ECS_LAUNCH_TYPE}"
     --platform-version "${ECS_PLATFORM_VERSION}"
     --network-configuration "${NETWORK_CONFIGURATION}"
+    --load-balancers "${LOAD_BALANCER_PARAM}"
   )
 
   if [[ "${ECS_ENABLE_EXECUTE_COMMAND:-false}" == "true" ]]; then

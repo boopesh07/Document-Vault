@@ -25,6 +25,8 @@
         {"name": "AWS_REGION", "value": "<AWS_REGION>"},
         {"name": "DOCUMENT_VAULT_BUCKET", "value": "<DOCUMENT_VAULT_BUCKET>"},
         {"name": "AWS_S3_KMS_KEY_ID", "value": "<AWS_S3_KMS_KEY_ID>"},
+        {"name": "AWS_ACCESS_KEY_ID", "value": "<AWS_ACCESS_KEY_ID>"},
+        {"name": "AWS_SECRET_ACCESS_KEY", "value": "<AWS_SECRET_ACCESS_KEY>"},
         {"name": "DOCUMENT_EVENTS_QUEUE_URL", "value": "<DOCUMENT_EVENTS_QUEUE_URL>"},
         {"name": "AUDIT_SNS_TOPIC_ARN", "value": "<AUDIT_SNS_TOPIC_ARN>"},
         {"name": "PRESIGNED_URL_EXPIRATION_SECONDS", "value": "<PRESIGNED_URL_EXPIRATION_SECONDS>"},
