@@ -86,8 +86,6 @@ class Settings(BaseSettings):
     )
     enable_duplicate_hash_detection: bool = Field(default=True, alias="ENABLE_DUPLICATE_HASH_DETECTION")
 
-    presigned_url_expiration_seconds: int = 3600
-
     @field_validator(
         "aws_profile",
         "aws_access_key_id",
