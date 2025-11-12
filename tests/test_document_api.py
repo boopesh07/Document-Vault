@@ -736,62 +736,55 @@ async def test_audit_event_emitted_on_archive(entity_id, user_id, document_id):
 async def test_audit_event_payload_schema_compliance():
     """Test that audit event payload conforms to the EPR service contract."""
     from app.services.audit_event_publisher import AuditEventPublisher
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
     from uuid import uuid4
     import json
+    import httpx
 
     event_id = uuid4()
     actor_id = uuid4()
     entity_id = uuid4()
 
-    mock_sns_client = MagicMock()
-    mock_sns_client.publish = AsyncMock()
+    mock_http_client = MagicMock(spec=httpx.AsyncClient)
+    mock_http_client.post = AsyncMock(return_value=httpx.Response(201, json={"delivery_state": "delivered"}))
 
-    publisher = AuditEventPublisher()
+    publisher = AuditEventPublisher(mock_http_client)
 
-    # Patch the SNS client creation
-    with patch.object(publisher._session, 'client') as mock_client_context:
-        mock_client_context.return_value.__aenter__.return_value = mock_sns_client
-        
-        await publisher.publish_event(
-            action="document.uploaded",
-            actor_id=actor_id,
-            actor_type="user",
-            entity_id=entity_id,
-            entity_type="document",
-            details={"filename": "test.pdf"},
-            correlation_id="req-123",
-            event_id=event_id,
-        )
+    await publisher.publish_event(
+        action="document.uploaded",
+        actor_id=actor_id,
+        actor_type="user",
+        entity_id=entity_id,
+        entity_type="document",
+        details={"filename": "test.pdf"},
+        correlation_id="req-123",
+        event_id=event_id,
+    )
 
-    # Verify SNS publish was called
-    mock_sns_client.publish.assert_called_once()
-    call_kwargs = mock_sns_client.publish.call_args[1]
+    # Verify httpx client was called
+    mock_http_client.post.assert_called_once()
+    call_kwargs = mock_http_client.post.call_args.kwargs
 
     # Parse the message body
-    message_body = json.loads(call_kwargs["Message"])
+    message_body = call_kwargs["json"]
 
     # Validate schema compliance
-    assert "event_id" in message_body
-    assert message_body["event_id"] == str(event_id)
-    assert message_body["source"] == "document-vault-service"
-    assert message_body["action"] == "document.uploaded"
-    assert message_body["actor_id"] == str(actor_id)
-    assert message_body["actor_type"] == "user"
-    assert message_body["entity_id"] == str(entity_id)
-    assert message_body["entity_type"] == "document"
-    assert message_body["correlation_id"] == "req-123"
-    assert message_body["details"] == {"filename": "test.pdf"}
-    assert "occurred_at" in message_body
-    
-    # Validate ISO-8601 timestamp format
-    from datetime import datetime
-    datetime.fromisoformat(message_body["occurred_at"].replace("Z", "+00:00"))
+    assert "event_type" in message_body
+    assert message_body["event_type"] == "document.uploaded"
+    assert message_body["source"] == "document_vault"
+    assert "context" in message_body
+    assert "payload" in message_body
 
-    # Verify message attributes
-    assert "MessageAttributes" in call_kwargs
-    assert call_kwargs["MessageAttributes"]["action"]["StringValue"] == "document.uploaded"
-    assert call_kwargs["MessageAttributes"]["source"]["StringValue"] == "document-vault-service"
+    context = message_body["context"]
+    assert context["actor_id"] == str(actor_id)
+    assert context["actor_type"] == "user"
+    assert context["entity_id"] == str(entity_id)
+    assert context["entity_type"] == "document"
+    
+    payload = message_body["payload"]
+    assert payload == {"filename": "test.pdf"}
+    
+    assert message_body["correlation_id"] == "req-123"
 
 
 # ==================== Document Events (SQS/Internal Event Bus) Tests ====================

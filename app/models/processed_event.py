@@ -13,7 +13,7 @@ class ProcessedEvent(PrimaryKeyUUIDMixin, TimestampMixin, Base):
     This table prevents duplicate processing of the same event from SQS,
     especially useful when messages are redelivered or duplicated.
     """
-    __tablename__ = "processed_events"
+    __tablename__ = "document_vault_processed_events"
 
     event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     source: Mapped[str] = mapped_column(String(128), nullable=False)

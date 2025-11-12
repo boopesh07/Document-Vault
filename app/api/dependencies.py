@@ -29,11 +29,12 @@ def get_access_control_service(
 
 @lru_cache(maxsize=1)
 def get_document_service() -> DocumentService:
+    http_client = get_http_client()
     return DocumentService(
         storage_service=StorageService(),
         hashing_service=HashingService(),
-        audit_event_publisher=AuditEventPublisher(),
-        access_control_service=get_access_control_service(),
+        audit_event_publisher=AuditEventPublisher(http_client),
+        access_control_service=get_access_control_service(http_client),
         blockchain_service=BlockchainService(),
         event_publisher=DocumentEventPublisher(),
     )

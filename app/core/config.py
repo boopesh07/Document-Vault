@@ -40,7 +40,6 @@ class Settings(BaseSettings):
 
     # Queueing / events
     document_events_queue_url: str = Field(..., alias="DOCUMENT_EVENTS_QUEUE_URL")
-    audit_sns_topic_arn: str = Field(..., alias="AUDIT_SNS_TOPIC_ARN")
     compliance_alert_queue_url: str | None = Field(default=None, alias="COMPLIANCE_ALERT_QUEUE_URL")
     
     # Document Vault Consumer (entity deletion events)

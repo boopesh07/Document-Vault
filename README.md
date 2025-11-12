@@ -23,7 +23,7 @@ The application also ships with an asynchronous consumer that listens for entity
 | Storage      | `StorageService` uploads to S3 using SSE-KMS and issues presigned download URLs |
 | Hashing      | `HashingService` computes SHA-256 digests for upload & verification flows |
 | Access       | Authorization checks delegated to EPR service (HTTP client) or a mock RBAC implementation |
-| Events       | `DocumentEventPublisher` (SQS) and `AuditEventPublisher` (SNS) publish document lifecycle events |
+| Events       | `DocumentEventPublisher` (SQS) and `AuditEventPublisher` (API) publish document lifecycle events |
 | Blockchain   | `BlockchainService` is currently a mock that logs registrations |
 | Background   | `DocumentVaultConsumer` polls SQS for entity deletion events and invokes cascade archival |
 
@@ -71,7 +71,7 @@ Responses are defined in `app/schemas/document.py`. Upload requests expect `meta
 
 - **`DocumentService`** orchestrates authorization, validation, hashing, storage, event publication, and DB writes.
 - **`StorageService`** wraps aioboto3 for S3 interactions (uploads, streaming, presigned URL generation).
-- **`AuditEventPublisher`** sends lifecycle audit events to a central SNS topic.
+- **`AuditEventPublisher`** sends lifecycle audit events to the EPR service API.
 - **`DocumentEventPublisher`** emits document lifecycle events and (if configured) integrity alerts to SQS.
 - **`HashingService`** streams SHA-256 hashing with configurable buffer size.
 - **`EprService` / `EprServiceMock`** encapsulate permission checks against the Entity & Permissions (EPR) service.
@@ -82,7 +82,7 @@ Responses are defined in `app/schemas/document.py`. Upload requests expect `meta
 ## Events & Integrations
 
 - **Document lifecycle events** (`document.uploaded`, `document.verified`, `document.mismatch`, `document.archived`, `document.relinked`) are published via SQS.
-- **Audit events** for the same actions are pushed to SNS for centralised ledgering.
+- **Audit events** for the same actions are pushed to the EPR service API for centralised ledgering.
 - **Integrity alerts** on hash mismatch are optionally emitted to a compliance alert queue with severity metadata.
 - **Blockchain integration** is currently stubbed; `register_document` logs and returns a deterministic fake tx id.
 
@@ -112,7 +112,6 @@ Configuration is driven by environment variables parsed in `app/core/config.py`.
 
 ### Messaging & Events
 - `DOCUMENT_EVENTS_QUEUE_URL`
-- `AUDIT_SNS_TOPIC_ARN`
 - `COMPLIANCE_ALERT_QUEUE_URL` (optional)
 
 ### Access Control
@@ -186,7 +185,7 @@ Configuration is driven by environment variables parsed in `app/core/config.py`.
 | `metadata` | JSON payload (optional) |
 | `created_at`, `updated_at` | Auto timestamps |
 
-### `processed_events`
+### `document_vault_processed_events`
 | Column | Notes |
 |--------|-------|
 | `id` (UUID PK) | Generated UUID |
@@ -202,7 +201,7 @@ Configuration is driven by environment variables parsed in `app/core/config.py`.
 `app.workers.document_vault_consumer.DocumentVaultConsumer` continuously polls an SQS queue (long-polling by default) for `entity.deleted` events. Each message:
 
 1. Validates payload (supports SNS envelope or direct SQS payloads).
-2. Skips already processed events using the `processed_events` table.
+2. Skips already processed events using the `document_vault_processed_events` table.
 3. Invokes `DocumentService.cascade_archive_by_entity`, which archives any non-archived documents for that entity and emits audit/document events.
 4. Deletes the message upon success.
 

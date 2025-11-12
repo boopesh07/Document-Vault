@@ -581,3 +581,10 @@ async def test_all_allowed_mime_types_accepted(
         assert document is not None
         assert document.mime_type == mime_type
 
+
+
+
+
+
+
+

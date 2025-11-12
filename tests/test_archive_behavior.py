@@ -706,3 +706,10 @@ async def test_complete_archive_lifecycle(
     assert archived_doc.sha256_hash is not None
     assert archived_doc.entity_id == entity_id
 
+
+
+
+
+
+
+

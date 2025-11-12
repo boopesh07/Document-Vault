@@ -796,3 +796,10 @@ async def test_compliance_officer_role_permissions():
         resource_id=entity_id,
     )
 
+
+
+
+
+
+
+
