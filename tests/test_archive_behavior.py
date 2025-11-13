@@ -346,7 +346,6 @@ async def test_archived_documents_hidden_from_default_list(
     documents = await service.list_documents(
         mock_session,
         entity_id=entity_id,
-        entity_type=DocumentEntityType.ISSUER,
     )
     
     # Only active documents returned
@@ -425,7 +424,6 @@ async def test_archived_documents_included_when_explicitly_requested(
     documents = await service.list_documents(
         mock_session,
         entity_id=entity_id,
-        entity_type=DocumentEntityType.ISSUER,
         include_archived=True,
     )
     
@@ -478,7 +476,6 @@ async def test_empty_list_when_all_documents_archived(
     documents = await service.list_documents(
         mock_session,
         entity_id=entity_id,
-        entity_type=DocumentEntityType.ISSUER,
     )
     
     # Empty list returned
@@ -705,6 +702,7 @@ async def test_complete_archive_lifecycle(
     assert archived_doc.storage_key is not None
     assert archived_doc.sha256_hash is not None
     assert archived_doc.entity_id == entity_id
+
 
 
 

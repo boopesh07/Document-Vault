@@ -194,7 +194,6 @@ async def test_list_documents_success(async_client, aws_environment, mock_docume
 
     response = await async_client.get(
         f"/api/v1/documents/{entity_id}",
-        params={"entity_type": "issuer"},
     )
 
     assert response.status_code == 200
@@ -212,7 +211,6 @@ async def test_list_documents_empty_result(async_client, aws_environment, entity
 
     response = await async_client.get(
         f"/api/v1/documents/{entity_id}",
-        params={"entity_type": "issuer"},
     )
 
     assert response.status_code == 200

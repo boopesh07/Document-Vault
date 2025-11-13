@@ -90,11 +90,10 @@ async def verify_document(
 @router.get("/{entity_id}", response_model=DocumentListResponse)
 async def list_documents(
     entity_id: UUID,
-    entity_type: DocumentEntityType,
     session: AsyncSession = Depends(get_db_session),
     document_service: DocumentService = Depends(get_document_service),
 ):
-    documents = await document_service.list_documents(session, entity_id=entity_id, entity_type=entity_type)
+    documents = await document_service.list_documents(session, entity_id=entity_id)
     return DocumentListResponse(documents=[DocumentResponse.from_model(doc) for doc in documents])
 
 

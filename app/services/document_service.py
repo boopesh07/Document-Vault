@@ -490,7 +490,7 @@ class DocumentService:
         return document
 
     async def list_documents(
-        self, session: AsyncSession, *, entity_id: UUID, entity_type: DocumentEntityType, include_archived: bool = False
+        self, session: AsyncSession, *, entity_id: UUID, include_archived: bool = False
     ) -> Sequence[Document]:
         """
         List documents for an entity.
@@ -498,15 +498,13 @@ class DocumentService:
         Args:
             session: Database session
             entity_id: UUID of the entity
-            entity_type: Type of entity
             include_archived: If True, include archived documents. Default False (excludes archived).
         
         Returns:
             List of documents (excludes archived by default)
         """
         query = select(Document).where(
-            Document.entity_id == entity_id,
-            Document.entity_type == entity_type
+            Document.entity_id == entity_id
         )
         
         # Exclude archived documents by default
@@ -515,13 +513,11 @@ class DocumentService:
             logger.debug(
                 "Listing documents (excluding archived)",
                 entity_id=str(entity_id),
-                entity_type=entity_type.value,
             )
         else:
             logger.debug(
                 "Listing documents (including archived)",
                 entity_id=str(entity_id),
-                entity_type=entity_type.value,
             )
         
         result = await session.execute(query)
@@ -530,7 +526,6 @@ class DocumentService:
         logger.info(
             "Documents listed",
             entity_id=str(entity_id),
-            entity_type=entity_type.value,
             count=len(documents),
             include_archived=include_archived,
         )
