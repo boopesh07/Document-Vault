@@ -69,9 +69,11 @@ class AuditEventPublisher:
             "correlation_id": correlation_id or built_correlation_id,
         }
 
+        base_url = str(settings.epr_service_url).rstrip("/")
+
         try:
             response = await self.http_client.post(
-                f"{settings.epr_service_url}/api/v1/events",
+                f"{base_url}/api/v1/events",
                 json=payload,
                 timeout=settings.epr_service_timeout,
             )
@@ -106,7 +108,6 @@ class AuditEventPublisher:
                 action=action,
                 error=str(e),
             )
-
 
 
 

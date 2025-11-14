@@ -69,6 +69,7 @@ def document_service_with_mocks():
     
     mock_epr = MagicMock(spec=EprServiceMock)
     mock_epr.is_authorized = AsyncMock(return_value=True)
+    mock_epr.trigger_document_verification_workflow = AsyncMock()
     
     mock_blockchain = MagicMock(spec=BlockchainService)
     mock_event_publisher = MagicMock(spec=DocumentEventPublisher)
@@ -503,6 +504,9 @@ async def test_complete_upload_pipeline_validation(
     document_service_with_mocks.audit_event_publisher.publish_event.assert_called_once()
     document_service_with_mocks.event_publisher.publish.assert_called_once()
     
+    # 7. Verification workflow triggered
+    document_service_with_mocks.access_control_service.trigger_document_verification_workflow.assert_called_once()
+
     # Verify audit event
     audit_call = document_service_with_mocks.audit_event_publisher.publish_event.call_args[1]
     assert audit_call["action"] == "document.uploaded"
@@ -512,6 +516,13 @@ async def test_complete_upload_pipeline_validation(
     doc_event_call = document_service_with_mocks.event_publisher.publish.call_args[1]
     assert doc_event_call["event_type"] == "document.uploaded"
     assert "sha256_hash" in doc_event_call["payload"]
+
+    # Verify workflow trigger payload
+    workflow_call = document_service_with_mocks.access_control_service.trigger_document_verification_workflow.call_args[1]
+    assert workflow_call["document_id"] == document.id
+    assert workflow_call["entity_id"] == entity_id
+    assert workflow_call["entity_type"] == "issuer"
+    assert workflow_call["document_type"] == "operating_agreement"
 
 
 # ==================== Test 8: Allowed MIME Types ====================

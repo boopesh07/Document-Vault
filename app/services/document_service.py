@@ -227,6 +227,14 @@ class DocumentService:
             },
         )
 
+        # Asynchronously trigger the verification workflow
+        await self.access_control_service.trigger_document_verification_workflow(
+            document_id=document.id,
+            entity_id=document.entity_id,
+            entity_type=document.entity_type.value,
+            document_type=document.document_type.value,
+        )
+
         logger.info("Document uploaded", document_id=str(document.id), storage_key=storage_key)
         return document
 

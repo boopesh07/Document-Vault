@@ -103,3 +103,22 @@ class EprServiceMock:
         
         allowed_actions = role_actions.get(role, set())
         return action in allowed_actions
+
+    async def trigger_document_verification_workflow(
+        self,
+        *,
+        document_id: UUID,
+        entity_id: UUID,
+        entity_type: str,
+        document_type: str,
+    ) -> None:
+        """Mock version of triggering the document verification workflow."""
+        logger.info(
+            "Mocking trigger of document verification workflow.",
+            document_id=str(document_id),
+            entity_id=str(entity_id),
+            entity_type=entity_type,
+            document_type=document_type,
+        )
+        # In a real test, you might want to record that this was called.
+        pass

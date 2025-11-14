@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 import httpx
@@ -20,7 +21,10 @@ class EprService:
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
-        self.base_url = str(settings.epr_service_url) if settings.epr_service_url else None
+        if settings.epr_service_url:
+            self.base_url = str(settings.epr_service_url).rstrip("/")
+        else:
+            self.base_url = None
         self.timeout = settings.epr_service_timeout
 
     async def is_authorized(
@@ -93,3 +97,72 @@ class EprService:
                 error=str(e),
             )
             return False
+
+    async def trigger_document_verification_workflow(
+        self,
+        *,
+        document_id: UUID,
+        entity_id: UUID,
+        entity_type: str,
+        document_type: str,
+    ) -> None:
+        """
+        Trigger the document verification workflow in the EPR service.
+
+        Args:
+            document_id: UUID of the document to verify.
+            entity_id: UUID of the owning entity.
+            entity_type: Type of the entity (e.g., "issuer").
+            document_type: Type of the document (e.g., "offering_memorandum").
+        """
+        if not self.base_url:
+            logger.error("EPR service URL not configured, cannot trigger workflow.")
+            return
+
+        payload = {
+            "document_id": str(document_id),
+            "entity_id": str(entity_id),
+            "entity_type": entity_type,
+            "document_type": document_type,
+        }
+
+        # Helpful when debugging integration failures: emit equivalent curl command
+        curl_cmd = (
+            f"curl -X POST '{self.base_url}/api/v1/workflows/document-verification/trigger' "
+            f"-H 'Content-Type: application/json' "
+            f"-d '{json.dumps(payload)}'"
+        )
+        logger.info(
+            "Triggering document verification workflow via EPR",
+            document_id=str(document_id),
+            entity_id=str(entity_id),
+            curl=curl_cmd,
+        )
+
+        try:
+            response = await self.http_client.post(
+                f"{self.base_url}/api/v1/workflows/document-verification/trigger",
+                json=payload,
+                timeout=self.timeout,
+            )
+
+            if response.status_code in [200, 201, 202]:
+                logger.info(
+                    "Successfully triggered document verification workflow.",
+                    document_id=str(document_id),
+                    status_code=response.status_code,
+                )
+            else:
+                logger.warning(
+                    "Failed to trigger document verification workflow.",
+                    document_id=str(document_id),
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
+
+        except httpx.RequestError as e:
+            logger.error(
+                "Error triggering document verification workflow.",
+                document_id=str(document_id),
+                error=str(e),
+            )

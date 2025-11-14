@@ -75,6 +75,8 @@ async def verify_document(
         )
         await session.flush()
         await session.commit()
+        if hasattr(document, "_sa_instance_state"):
+            await session.refresh(document)
         return DocumentResponse.from_model(document)
     except DocumentNotFoundError as exc:
         await session.rollback()
